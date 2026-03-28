@@ -33,6 +33,16 @@ _OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _OPENROUTER_MODEL = "nousresearch/hermes-3-llama-3.1-405b"
 _LLM_TIMEOUT = 2.0          # seconds before Hermes is considered unavailable
+_CLARIFICATION_TIMEOUT = 30.0  # seconds before a pending clarification is abandoned
+_ACTIVE_MODE_COOLDOWN  = 15.0  # seconds between proactive Quorum utterances
+_OFFER_TIMEOUT         = 20.0  # seconds before a pending offer is abandoned
+# Set QUORUM_PROACTIVE=true to enable offer-before-acting in active mode.
+# Off by default so existing tests pass without modification.
+_PROACTIVE = os.getenv("QUORUM_PROACTIVE", "false").lower() == "true"
+
+# Affirmative / negative keywords for resolving pending offers
+_AFFIRMATIVE = {"yes", "yeah", "yep", "sure", "go ahead", "do it", "please", "yup"}
+_NEGATIVE    = {"no", "nope", "don't", "skip", "cancel", "stop", "nevermind"}
 _LLM_SYSTEM_PROMPT = (
     "You are Quorum, an AI meeting participant. You are helpful, concise, "
     "and only speak when you have something genuinely useful to add. "
@@ -184,6 +194,17 @@ class QuorumOrchestrator:
         self._last_addressed: dict[str, float] = {}
         self._CONVO_WINDOW_SECS = 20
 
+        # Pending clarification state — keyed by meeting_id
+        # Structure: {intent_type, original_segment, asked_at, question}
+        self._pending_clarifications: dict[str, dict] = {}
+
+        # Proactive offer state — keyed by meeting_id
+        # Structure: {action, original_req, offered_at}
+        self._pending_offers: dict[str, dict] = {}
+
+        # Cooldown tracking — keyed by meeting_id, value is last-spoken timestamp
+        self._last_spoken: dict[str, float] = {}
+
         logger.info(
             "QuorumOrchestrator ready — mode=%s", self._mode.get_mode()
         )
@@ -248,6 +269,39 @@ class QuorumOrchestrator:
 
         # ── Step 2: store in context ──────────────────────────────────────────
         self._context.add_segment(segment)
+
+        # ── Step 2.5: resolve pending offer or clarification ─────────────────
+        # Check offers first — they are more recent than clarifications
+        offer = self._pending_offers.get(mid)
+        if offer:
+            if time.time() - offer["offered_at"] > _OFFER_TIMEOUT:
+                logger.info("[%s] Pending offer timed out — clearing", mid)
+                del self._pending_offers[mid]
+            else:
+                lowered = segment.text.lower()
+                if any(kw in lowered for kw in _AFFIRMATIVE):
+                    logger.info("[%s] Offer accepted — dispatching action", mid)
+                    req = offer["original_req"]
+                    self._context.add_action(req)
+                    result = await self._act(req)
+                    logger.info("[%s] Deferred action result: %s", mid, result)
+                    del self._pending_offers[mid]
+                    return
+                elif any(kw in lowered for kw in _NEGATIVE):
+                    logger.info("[%s] Offer declined — clearing", mid)
+                    del self._pending_offers[mid]
+                    return
+                # Ambiguous response — let it fall through to normal intent detection
+
+        pending = self._pending_clarifications.get(mid)
+        if pending:
+            if time.time() - pending["asked_at"] > _CLARIFICATION_TIMEOUT:
+                logger.info("[%s] Clarification timed out — clearing", mid)
+                del self._pending_clarifications[mid]
+            else:
+                await self._resolve_clarification(segment, pending)
+                del self._pending_clarifications[mid]
+                return
 
         # ── Step 3: detect intent ─────────────────────────────────────────────
         intent = self._intent.detect(segment)
@@ -331,21 +385,38 @@ class QuorumOrchestrator:
             segment: The triggering transcript segment.
             intent:  The detected Intent with extracted_topic.
         """
+        mid   = segment.meeting_id
         topic = intent.extracted_topic or segment.text
-        req = ActionRequest(
+        req   = ActionRequest(
             action_type="create_task",
             parameters={"title": topic, "source_text": segment.text},
             context=segment.text,
-            meeting_id=segment.meeting_id,
+            meeting_id=mid,
         )
-        self._context.add_action(req)
-        logger.info("[%s] Dispatching create_task: %r", segment.meeting_id, topic)
-        result = await self._act(req)
-        logger.info("[%s] create_task result: %s", segment.meeting_id, result)
 
-        await self._speak(SpeakCommand(
-            text=f"Got it — I've added that as a task.",
-            meeting_id=segment.meeting_id,
+        # In proactive mode: offer first, act on affirmative response
+        if _PROACTIVE and self._mode.get_mode() == "active" and not self._on_cooldown(mid):
+            self._pending_offers[mid] = {
+                "action":       "create_task",
+                "original_req": req,
+                "offered_at":   time.time(),
+            }
+            logger.info("[%s] Proactive: offering to create task %r", mid, topic)
+            await self._speak_and_record(SpeakCommand(
+                text=f"I could create a task for that — want me to?",
+                meeting_id=mid,
+                priority="normal",
+            ))
+            return
+
+        self._context.add_action(req)
+        logger.info("[%s] Dispatching create_task: %r", mid, topic)
+        result = await self._act(req)
+        logger.info("[%s] create_task result: %s", mid, result)
+
+        await self._speak_and_record(SpeakCommand(
+            text="Got it — I've added that as a task.",
+            meeting_id=mid,
             priority="normal",
         ))
 
@@ -353,25 +424,48 @@ class QuorumOrchestrator:
         """
         Dispatch a pull_pr ActionRequest when someone asks to pull up a PR.
 
+        If no PR reference (number or name) is found in the transcript, asks
+        a clarifying question and stores a pending state. The next segment
+        resolves the clarification and dispatches the action.
+
         Args:
             segment: The triggering transcript segment.
             intent:  The detected Intent with extracted_topic.
         """
-        topic = intent.extracted_topic or "unknown"
+        mid = segment.meeting_id
+
+        # Ask for clarification if we have no PR reference to work with
+        if not intent.extracted_topic:
+            question = "Which PR are you referring to?"
+            self._pending_clarifications[mid] = {
+                "intent_type":       "ACTION_PR",
+                "original_segment":  segment,
+                "asked_at":          time.time(),
+                "question":          question,
+            }
+            logger.info("[%s] ACTION_PR — no PR reference, asking for clarification", mid)
+            await self._speak(SpeakCommand(
+                text=question,
+                meeting_id=mid,
+                priority="normal",
+            ))
+            return
+
+        topic = intent.extracted_topic
         req = ActionRequest(
             action_type="pull_pr",
             parameters={"reference": topic, "source_text": segment.text},
             context=segment.text,
-            meeting_id=segment.meeting_id,
+            meeting_id=mid,
         )
         self._context.add_action(req)
-        logger.info("[%s] Dispatching pull_pr: %r", segment.meeting_id, topic)
+        logger.info("[%s] Dispatching pull_pr: %r", mid, topic)
         result = await self._act(req)
-        logger.info("[%s] pull_pr result: %s", segment.meeting_id, result)
+        logger.info("[%s] pull_pr result: %s", mid, result)
 
-        await self._speak(SpeakCommand(
+        await self._speak_and_record(SpeakCommand(
             text=f"Pulling up the PR for {topic} now.",
-            meeting_id=segment.meeting_id,
+            meeting_id=mid,
             priority="normal",
         ))
 
@@ -395,7 +489,7 @@ class QuorumOrchestrator:
         result = await self._act(req)
         logger.info("[%s] generate_chart result: %s", segment.meeting_id, result)
 
-        await self._speak(SpeakCommand(
+        await self._speak_and_record(SpeakCommand(
             text=f"Generating that chart now.",
             meeting_id=segment.meeting_id,
             priority="normal",
@@ -413,7 +507,7 @@ class QuorumOrchestrator:
         self._context.add_decision(decision_text, segment.meeting_id)
         logger.info("[%s] Decision logged: %r", segment.meeting_id, decision_text)
 
-        await self._speak(SpeakCommand(
+        await self._speak_and_record(SpeakCommand(
             text=f"Noted — I've logged that decision.",
             meeting_id=segment.meeting_id,
             priority="normal",
@@ -444,6 +538,8 @@ class QuorumOrchestrator:
                 sources=["notion", "slack"],
                 meeting_id=mid,
             ))
+            # Deduplicate — don't surface the same URL twice in a meeting
+            results = [r for r in results if not self._context.is_already_surfaced(r.url, mid)]
             for r in results:
                 self._context.add_surfaced_result(r, mid)
 
@@ -471,7 +567,7 @@ class QuorumOrchestrator:
             response = await self.call_llm(prompt)
 
         logger.info("[%s] Speaking question answer: %r", mid, response[:80])
-        await self._speak(SpeakCommand(
+        await self._speak_and_record(SpeakCommand(
             text=response,
             meeting_id=mid,
             priority="normal",
@@ -493,6 +589,11 @@ class QuorumOrchestrator:
         topic = intent.extracted_topic or segment.text
         logger.info("[%s] Topic mentioned: %r — fetching context", mid, topic)
 
+        # Don't interrupt a meeting too frequently in active mode
+        if self._mode.get_mode() == "active" and self._on_cooldown(mid):
+            logger.info("[%s] Skipping topic surface — on cooldown", mid)
+            return
+
         results = await self._integrate(ContextRequest(
             query=topic,
             sources=["github", "notion", "slack"],
@@ -510,6 +611,12 @@ class QuorumOrchestrator:
                 await self._handle_freeform(segment)
             else:
                 logger.debug("[%s] No integration results for topic %r — staying quiet", mid, topic)
+            return
+
+        # Deduplicate — don't surface the same URL twice in a meeting
+        results = [r for r in results if not self._context.is_already_surfaced(r.url, mid)]
+        if not results:
+            logger.debug("[%s] All results already surfaced for topic %r — skipping", mid, topic)
             return
 
         for r in results:
@@ -536,7 +643,7 @@ class QuorumOrchestrator:
             return
 
         logger.info("[%s] Surfacing context for topic %r", mid, topic)
-        await self._speak(SpeakCommand(
+        await self._speak_and_record(SpeakCommand(
             text=response,
             meeting_id=mid,
             priority="normal",
@@ -570,6 +677,68 @@ class QuorumOrchestrator:
             return
         logger.info("[%s] Freeform LLM response: %r", mid, response[:80])
         await self._speak(SpeakCommand(text=response, meeting_id=mid, priority="normal"))
+
+    # ── Cooldown + proactive speak helpers ───────────────────────────────────
+
+    def _on_cooldown(self, meeting_id: str) -> bool:
+        """Return True if Quorum has spoken within _ACTIVE_MODE_COOLDOWN seconds."""
+        last = self._last_spoken.get(meeting_id, 0.0)
+        return (time.time() - last) < _ACTIVE_MODE_COOLDOWN
+
+    def _record_speak(self, meeting_id: str) -> None:
+        """Record that Quorum just spoke (for cooldown tracking)."""
+        self._last_spoken[meeting_id] = time.time()
+
+    async def _speak_and_record(self, cmd: SpeakCommand) -> None:
+        """Speak and update the cooldown timer for this meeting."""
+        await self._speak(cmd)
+        self._record_speak(cmd.meeting_id)
+
+    # ── Clarification helpers ─────────────────────────────────────────────────
+
+    async def _resolve_clarification(
+        self,
+        answer_segment: TranscriptSegment,
+        pending: dict,
+    ) -> None:
+        """
+        Re-dispatch the original intent using the clarifying answer.
+
+        Takes the pending intent type and re-runs the appropriate handler,
+        substituting the answer segment's text as the extracted topic.
+
+        Args:
+            answer_segment: The segment containing the user's answer.
+            pending:        The stored clarification dict.
+        """
+        from .intent import Intent, ACTION_PR, ACTION_TASK
+
+        mid          = answer_segment.meeting_id
+        intent_type  = pending["intent_type"]
+        answer_text  = answer_segment.text.strip()
+
+        logger.info(
+            "[%s] Resolving clarification for %s with answer: %r",
+            mid, intent_type, answer_text,
+        )
+
+        # Build a synthetic Intent using the answer as the topic
+        resolved_intent = Intent(
+            type=intent_type,
+            confidence=0.90,
+            extracted_topic=answer_text,
+            raw_text=answer_text,
+            requires_llm=False,
+        )
+
+        if intent_type == ACTION_PR:
+            await self._handle_action_pr(answer_segment, resolved_intent)
+        elif intent_type == ACTION_TASK:
+            await self._handle_action_task(answer_segment, resolved_intent)
+        else:
+            logger.warning(
+                "[%s] No clarification resolver for intent type %s", mid, intent_type
+            )
 
     # ── LLM ──────────────────────────────────────────────────────────────────
 
