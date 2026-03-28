@@ -31,7 +31,7 @@ _HERMES_URL = f"{_HERMES_HOST}/api/generate"
 _HERMES_MODEL = os.getenv("HERMES_MODEL", "hermes3")
 _OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-_OPENROUTER_MODEL = "mistralai/mistral-7b-instruct"
+_OPENROUTER_MODEL = "nousresearch/hermes-3-llama-3.1-405b:free"
 _LLM_TIMEOUT = 2.0          # seconds before Hermes is considered unavailable
 _LLM_SYSTEM_PROMPT = (
     "You are Quorum, an AI meeting participant. You are helpful, concise, "
