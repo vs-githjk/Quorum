@@ -24,6 +24,9 @@ from bot.recall_client import RecallClient
 from voice.speak import QuorumSpeaker
 from voice.transcribe import DeepgramTranscriber
 
+# Agent brain
+from agent import QuorumOrchestrator, SpeakCommand, ContextRequest, ActionRequest, IntegrationResult
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 
 _LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -80,6 +83,13 @@ class QuorumBot:
         self._bot_status: BotStatus | None = None
         self._meeting_id: str | None = None
         self._server_task: asyncio.Task | None = None
+
+        # ── Agent orchestrator ────────────────────────────────────────────
+        self._orchestrator = QuorumOrchestrator(
+            speak_callback=self._speak_command,
+            integration_callback=self._integration_stub,
+            action_callback=self._action_stub,
+        )
 
         # Wire the segment callback into the manager
         self._manager.register_segment_callback(self.on_transcript_segment)
@@ -139,8 +149,9 @@ class QuorumBot:
 
         logger.info("Bot joining — bot_id=%s", self._bot_status.bot_id)
 
-        # ── Step 4: Register session with manager ─────────────────────────
+        # ── Step 4: Register session with manager + agent ────────────────
         self._manager.start_session(self._meeting_id, self._bot_status.bot_id)
+        await self._orchestrator.start_meeting(self._meeting_id)
 
         # ── Step 5: Keep running until interrupted ────────────────────────
         try:
@@ -169,6 +180,8 @@ class QuorumBot:
             except asyncio.CancelledError:
                 pass
 
+        if self._meeting_id:
+            await self._orchestrator.end_meeting(self._meeting_id)
         self._manager.end_session()
         logger.info("Quorum has left the meeting")
 
@@ -192,19 +205,32 @@ class QuorumBot:
 
         logger.info("[%s] %s", segment.speaker, segment.text)
 
-        # ── AGENT HOOK — plug in agent orchestrator here ──────────────────
-        # from agent.orchestrator import QuorumOrchestrator
-        # await self.orchestrator.process_segment(segment)
+        # ── AGENT HOOK — dispatch to orchestrator ─────────────────────────
+        await self._orchestrator.process_segment(segment)
         # ─────────────────────────────────────────────────────────────────
 
-        # MVP fallback: respond when directly addressed.
-        # Include common Deepgram mishearings of "Quorum".
-        _triggers = {"quorum", "coram", "corum", "korum", "quora"}
-        if any(t in segment.text.lower() for t in _triggers):
-            logger.info("Quorum addressed — responding")
-            await self._speaker.speak(
-                "I'm here. I'm listening and ready to help."
-            )
+    # ── Agent callbacks ───────────────────────────────────────────────────────
+
+    async def _speak_command(self, cmd: SpeakCommand) -> None:
+        """Receive a SpeakCommand from the orchestrator and speak it aloud."""
+        logger.info("Speaking: %r", cmd.text[:80])
+        await self._speaker.speak(cmd.text)
+
+    async def _integration_stub(self, req: ContextRequest) -> list[IntegrationResult]:
+        """
+        Stub integration callback — replace with real integrations module.
+        Returns empty list until integrations branch is merged in.
+        """
+        logger.info("Integration request (stub): query=%r sources=%s", req.query, req.sources)
+        return []
+
+    async def _action_stub(self, req: ActionRequest) -> dict:
+        """
+        Stub action callback — replace with real actions-ui module.
+        Logs the action until actions-ui branch is merged in.
+        """
+        logger.info("Action request (stub): type=%s params=%s", req.action_type, req.parameters)
+        return {"status": "stub", "action_type": req.action_type}
 
     # ── Audio injection ───────────────────────────────────────────────────────
 

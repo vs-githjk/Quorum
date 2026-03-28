@@ -20,7 +20,7 @@ ON_DEMAND = "on_demand"
 VALID_MODES = {ACTIVE, ON_DEMAND}
 
 # Trigger phrases that count as addressing Quorum directly
-QUORUM_TRIGGERS = ["quorum", "hey quorum"]
+QUORUM_TRIGGERS = ["quorum", "hey quorum", "hey q", "coram", "hey coram", "korem", "hey korem"]
 
 # Default path for persisted mode; can be overridden via env var
 DEFAULT_STATE_FILE = os.getenv("QUORUM_MODE_STATE_FILE", "mode_state.json")
