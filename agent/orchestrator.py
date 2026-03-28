@@ -178,6 +178,11 @@ class QuorumOrchestrator:
         self._context = MeetingContext()
 
         self._active_meetings: set[str] = set()
+        # Tracks when Quorum was last directly addressed, per meeting.
+        # Segments arriving within _CONVO_WINDOW_SECS after being addressed
+        # are treated as follow-up questions even if intent is NONE.
+        self._last_addressed: dict[str, float] = {}
+        self._CONVO_WINDOW_SECS = 20
 
         logger.info(
             "QuorumOrchestrator ready — mode=%s", self._mode.get_mode()
@@ -255,18 +260,37 @@ class QuorumOrchestrator:
             intent.requires_llm,
         )
 
-        # ── Step 4: bail on NONE — but first check if Quorum was addressed ──────
+        # ── Step 4: bail on NONE — unless addressed or in conversation window ────
         from .intent import NONE, ACTION_TASK, ACTION_PR, ACTION_CHART, DECISION, QUESTION, TOPIC_MENTION
 
         if intent.type == NONE:
-            # Even with no recognized intent, respond if directly addressed
-            if self._mode.is_addressed_to_quorum(segment.text):
-                logger.info("[%s] Addressed with no specific intent — acknowledging", mid)
+            addressed = self._mode.is_addressed_to_quorum(segment.text)
+            in_window = (
+                mid in self._last_addressed
+                and (segment.timestamp - self._last_addressed[mid]) < self._CONVO_WINDOW_SECS
+            )
+
+            if addressed:
+                # Update conversation window timestamp
+                self._last_addressed[mid] = segment.timestamp
+                logger.info("[%s] Addressed — acknowledging and opening conversation window", mid)
                 await self._speak(SpeakCommand(
                     text="I'm here. What do you need?",
                     meeting_id=mid,
                     priority="normal",
                 ))
+            elif in_window:
+                # Follow-up question within the conversation window — send to LLM
+                elapsed = int(segment.timestamp - self._last_addressed[mid])
+                logger.info("[%s] Follow-up within conversation window (%ds) — sending to LLM", mid, elapsed)
+                recent = self._context.get_recent_transcript(mid, n=5)
+                prompt = (
+                    f"Someone in a meeting is talking to you (Quorum). They said: \"{segment.text}\"\n\n"
+                    f"Recent transcript:\n{recent}\n\n"
+                    f"Answer helpfully and concisely in 1–2 sentences as Quorum."
+                )
+                response = await self.call_llm(prompt)
+                await self._speak(SpeakCommand(text=response, meeting_id=mid, priority="normal"))
             else:
                 logger.debug("[%s] Intent=NONE — staying quiet", mid)
             return
@@ -484,6 +508,7 @@ class QuorumOrchestrator:
             # If Quorum itself was addressed (e.g. "Hey Quorum"), acknowledge even
             # though there are no integration results to surface.
             if self._mode.is_addressed_to_quorum(segment.text):
+                self._last_addressed[mid] = segment.timestamp
                 logger.info("[%s] Addressed with no integration context — acknowledging", mid)
                 await self._speak(SpeakCommand(
                     text="I'm here. What do you need?",
