@@ -211,9 +211,9 @@ async def run() -> None:
         print(f"         Got      : {detail}")
         print()
 
-    print("─" * 70)
+    print("-" * 70)
     print(f"  Result: {total_pass}/{total} passed")
-    print("─" * 70)
+    print("-" * 70)
     print()
 
     if total_pass == total:
