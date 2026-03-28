@@ -1,0 +1,11 @@
+# Agent layer
+aiohttp>=3.9.0
+
+# Voice-bot layer
+deepgram-sdk==3.10.0
+elevenlabs>=2.0.0
+fastapi>=0.100.0
+uvicorn>=0.23.0
+httpx>=0.25.0
+python-dotenv>=1.0.0
+websockets>=12.0
