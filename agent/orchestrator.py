@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 _HERMES_HOST = os.getenv("HERMES_HOST", "http://localhost:11434")
 _HERMES_URL = f"{_HERMES_HOST}/api/generate"
-_HERMES_MODEL = "hermes"
+_HERMES_MODEL = os.getenv("HERMES_MODEL", "hermes3")
 _OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _OPENROUTER_MODEL = "mistralai/mistral-7b-instruct"
