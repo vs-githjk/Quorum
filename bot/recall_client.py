@@ -221,7 +221,7 @@ class RecallClient:
             ) as client:
                 resp = await client.post(
                     f"{_RECALL_BASE_URL}/bot/{bot_id}/output_audio/",
-                    json={"kind": "mp3", "data": encoded},
+                    json={"kind": "mp3", "b64_data": encoded},
                 )
                 resp.raise_for_status()
             logger.debug("Audio injected — bot=%s bytes=%d", bot_id, len(audio_bytes))
@@ -251,8 +251,8 @@ class RecallClient:
             async with httpx.AsyncClient(
                 timeout=_REQUEST_TIMEOUT, headers=self._headers
             ) as client:
-                resp = await client.delete(
-                    f"{_RECALL_BASE_URL}/bot/{bot_id}/"
+                resp = await client.post(
+                    f"{_RECALL_BASE_URL}/bot/{bot_id}/leave_call/"
                 )
                 resp.raise_for_status()
             logger.info("Bot %s left the meeting", bot_id)
