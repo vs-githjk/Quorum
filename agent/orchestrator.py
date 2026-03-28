@@ -260,39 +260,34 @@ class QuorumOrchestrator:
             intent.requires_llm,
         )
 
-        # ── Step 4: bail on NONE — unless addressed or in conversation window ────
+        # ── Step 4: handle NONE intent ────────────────────────────────────────────
         from .intent import NONE, ACTION_TASK, ACTION_PR, ACTION_CHART, DECISION, QUESTION, TOPIC_MENTION
+        from .mode import ACTIVE
 
         if intent.type == NONE:
-            addressed = self._mode.is_addressed_to_quorum(segment.text)
-            in_window = (
-                mid in self._last_addressed
-                and (segment.timestamp - self._last_addressed[mid]) < self._CONVO_WINDOW_SECS
-            )
-
-            if addressed:
-                # Update conversation window timestamp
-                self._last_addressed[mid] = segment.timestamp
-                logger.info("[%s] Addressed — acknowledging and opening conversation window", mid)
-                await self._speak(SpeakCommand(
-                    text="I'm here. What do you need?",
-                    meeting_id=mid,
-                    priority="normal",
-                ))
-            elif in_window:
-                # Follow-up question within the conversation window — send to LLM
-                elapsed = int(segment.timestamp - self._last_addressed[mid])
-                logger.info("[%s] Follow-up within conversation window (%ds) — sending to LLM", mid, elapsed)
-                recent = self._context.get_recent_transcript(mid, n=5)
-                prompt = (
-                    f"Someone in a meeting is talking to you (Quorum). They said: \"{segment.text}\"\n\n"
-                    f"Recent transcript:\n{recent}\n\n"
-                    f"Answer helpfully and concisely in 1–2 sentences as Quorum."
-                )
-                response = await self.call_llm(prompt)
-                await self._speak(SpeakCommand(text=response, meeting_id=mid, priority="normal"))
+            if self._mode.get_mode() == ACTIVE:
+                # In ACTIVE mode: always ask the LLM — let it decide whether to
+                # respond rather than silently dropping unrecognised segments.
+                await self._handle_freeform(segment)
             else:
-                logger.debug("[%s] Intent=NONE — staying quiet", mid)
+                # ON_DEMAND: only respond if directly addressed or in conversation window
+                addressed = self._mode.is_addressed_to_quorum(segment.text)
+                in_window = (
+                    mid in self._last_addressed
+                    and (segment.timestamp - self._last_addressed[mid]) < self._CONVO_WINDOW_SECS
+                )
+                if addressed:
+                    self._last_addressed[mid] = segment.timestamp
+                    logger.info("[%s] Addressed (ON_DEMAND) — opening conversation window", mid)
+                    await self._speak(SpeakCommand(
+                        text="I'm here. What do you need?",
+                        meeting_id=mid,
+                        priority="normal",
+                    ))
+                elif in_window:
+                    await self._handle_freeform(segment)
+                else:
+                    logger.debug("[%s] Intent=NONE, ON_DEMAND, not addressed — staying quiet", mid)
             return
 
         # ── Step 5: check mode ────────────────────────────────────────────────
@@ -505,16 +500,14 @@ class QuorumOrchestrator:
         ))
 
         if not results:
-            # If Quorum itself was addressed (e.g. "Hey Quorum"), acknowledge even
-            # though there are no integration results to surface.
-            if self._mode.is_addressed_to_quorum(segment.text):
-                self._last_addressed[mid] = segment.timestamp
-                logger.info("[%s] Addressed with no integration context — acknowledging", mid)
-                await self._speak(SpeakCommand(
-                    text="I'm here. What do you need?",
-                    meeting_id=mid,
-                    priority="normal",
-                ))
+            # No integration results — fall through to freeform LLM response
+            # so the bot can still answer from its own knowledge.
+            from .mode import ACTIVE as _ACTIVE
+            if self._mode.get_mode() == _ACTIVE or self._mode.is_addressed_to_quorum(segment.text):
+                if self._mode.is_addressed_to_quorum(segment.text):
+                    self._last_addressed[mid] = segment.timestamp
+                logger.info("[%s] No integration results for %r — falling back to freeform", mid, topic)
+                await self._handle_freeform(segment)
             else:
                 logger.debug("[%s] No integration results for topic %r — staying quiet", mid, topic)
             return
@@ -548,6 +541,35 @@ class QuorumOrchestrator:
             meeting_id=mid,
             priority="normal",
         ))
+
+    async def _handle_freeform(self, segment: TranscriptSegment) -> None:
+        """
+        Handle a segment with no recognised intent in ACTIVE mode or within
+        an ON_DEMAND conversation window.
+
+        Sends the text to the LLM with the recent transcript as context.
+        The LLM replies with SKIP if it decides the message doesn't need
+        a response, or with a 1–2 sentence spoken answer if it does.
+
+        Args:
+            segment: The transcript segment to respond to.
+        """
+        mid = segment.meeting_id
+        recent = self._context.get_recent_transcript(mid, n=6)
+        prompt = (
+            f"You are Quorum, an AI participant in a meeting. Someone just said: \"{segment.text}\"\n\n"
+            f"Recent conversation:\n{recent}\n\n"
+            f"If this is directed at you or is a question you can genuinely help with, "
+            f"respond in 1–2 sentences.\n"
+            f"If it is general meeting conversation that does not need your input, "
+            f"reply with exactly: SKIP"
+        )
+        response = await self.call_llm(prompt)
+        if response.strip().upper() == "SKIP" or not response:
+            logger.debug("[%s] LLM decided freeform not worth responding to", mid)
+            return
+        logger.info("[%s] Freeform LLM response: %r", mid, response[:80])
+        await self._speak(SpeakCommand(text=response, meeting_id=mid, priority="normal"))
 
     # ── LLM ──────────────────────────────────────────────────────────────────
 
