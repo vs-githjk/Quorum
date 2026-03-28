@@ -226,35 +226,60 @@ async def _handle_transcript_event(
         data:    Parsed JSON from the WebSocket message.
         manager: The shared AudioStreamManager instance.
     """
-    # Recall.ai wraps events: {"event": "transcript.data", "data": {...}}
-    event_type = data.get("event", "")
-    payload = data.get("data", data)  # fall back to root if no envelope
+    # Recall.ai payload shape (deepgram_streaming provider):
+    # {
+    #   "event": "transcript.data",
+    #   "data": {
+    #     "data": {
+    #       "words": [{"text": "Hey,", ...}, {"text": "Quorum.", ...}],
+    #       "language_code": "en",
+    #       "participant": {"id": "...", "name": "Speaker 0", ...},
+    #       "is_final": true   (may be present)
+    #     }
+    #   }
+    # }
 
+    event_type = data.get("event", "")
     if event_type and event_type != "transcript.data":
         logger.debug("Ignoring non-transcript event: %s", event_type)
         return
 
-    # Extract text — try Recall.ai's transcript structure first
-    text = (
-        payload.get("transcript", "")
-        or payload.get("text", "")
-        or _extract_deepgram_text(payload)
-    )
+    # Unwrap double-nested data.data
+    outer = data.get("data", {})
+    payload = outer.get("data", outer)
+
+    # Build text by joining words array
+    words = payload.get("words", [])
+    if words:
+        text = " ".join(w.get("text", "") for w in words).strip()
+    else:
+        # Fallback: direct text/transcript fields
+        text = payload.get("transcript", "") or payload.get("text", "")
+        if isinstance(text, dict):
+            text = text.get("text", "")
 
     if not text or not text.strip():
         logger.debug("Empty transcript payload — skipping")
         return
 
-    # Speaker label
-    raw_speaker = payload.get("speaker", payload.get("speaker_id", 0))
+    # Speaker from participant field
+    participant = payload.get("participant", {})
+    raw_speaker = (
+        participant.get("name")
+        or participant.get("id")
+        or payload.get("speaker", 0)
+    )
+    # Normalise to "Speaker N" format
     try:
         speaker = f"Speaker {int(raw_speaker)}"
     except (TypeError, ValueError):
-        speaker = "Speaker 0"
+        speaker = str(raw_speaker) if raw_speaker else "Speaker 0"
 
-    # Finality — Recall.ai may use is_final or type=="final"
+    # Finality — word-based Recall.ai events are always final.
+    # Fall back to True if the field is absent (deepgram_streaming provider
+    # does not include is_final in the word-based payload).
     is_final = bool(
-        payload.get("is_final", payload.get("final", False))
+        payload.get("is_final", payload.get("final", True))
     )
 
     meeting_id = manager.meeting_id or "unknown"
@@ -268,13 +293,7 @@ async def _handle_transcript_event(
     )
 
     manager.segments_received += 1
-    logger.debug(
-        "[%s] %s | final=%s | %r",
-        meeting_id,
-        speaker,
-        is_final,
-        text[:80],
-    )
+    logger.info("[%s] %s: %s", meeting_id, speaker, text)
 
     # Dispatch to registered callback
     if manager._on_segment is not None:

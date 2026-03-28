@@ -197,8 +197,11 @@ class QuorumBot:
         # await self.orchestrator.process_segment(segment)
         # ─────────────────────────────────────────────────────────────────
 
-        # MVP fallback: respond when directly addressed
-        if "quorum" in segment.text.lower():
+        # MVP fallback: respond when directly addressed.
+        # Include common Deepgram mishearings of "Quorum".
+        _triggers = {"quorum", "coram", "corum", "korum", "quora"}
+        if any(t in segment.text.lower() for t in _triggers):
+            logger.info("Quorum addressed — responding")
             await self._speaker.speak(
                 "I'm here. I'm listening and ready to help."
             )
