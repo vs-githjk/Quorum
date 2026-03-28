@@ -255,11 +255,20 @@ class QuorumOrchestrator:
             intent.requires_llm,
         )
 
-        # ── Step 4: bail on NONE ──────────────────────────────────────────────
+        # ── Step 4: bail on NONE — but first check if Quorum was addressed ──────
         from .intent import NONE, ACTION_TASK, ACTION_PR, ACTION_CHART, DECISION, QUESTION, TOPIC_MENTION
 
         if intent.type == NONE:
-            logger.debug("[%s] Intent=NONE — staying quiet", mid)
+            # Even with no recognized intent, respond if directly addressed
+            if self._mode.is_addressed_to_quorum(segment.text):
+                logger.info("[%s] Addressed with no specific intent — acknowledging", mid)
+                await self._speak(SpeakCommand(
+                    text="I'm here. What do you need?",
+                    meeting_id=mid,
+                    priority="normal",
+                ))
+            else:
+                logger.debug("[%s] Intent=NONE — staying quiet", mid)
             return
 
         # ── Step 5: check mode ────────────────────────────────────────────────
@@ -472,7 +481,17 @@ class QuorumOrchestrator:
         ))
 
         if not results:
-            logger.debug("[%s] No integration results for topic %r — staying quiet", mid, topic)
+            # If Quorum itself was addressed (e.g. "Hey Quorum"), acknowledge even
+            # though there are no integration results to surface.
+            if self._mode.is_addressed_to_quorum(segment.text):
+                logger.info("[%s] Addressed with no integration context — acknowledging", mid)
+                await self._speak(SpeakCommand(
+                    text="I'm here. What do you need?",
+                    meeting_id=mid,
+                    priority="normal",
+                ))
+            else:
+                logger.debug("[%s] No integration results for topic %r — staying quiet", mid, topic)
             return
 
         for r in results:
