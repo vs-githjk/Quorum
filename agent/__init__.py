@@ -14,20 +14,22 @@ the agent):
 """
 
 from .context import MeetingContext
-from .intent import Intent, IntentDetector
 from .mode import ModeManager
 from .orchestrator import (
     ActionRequest,
     ContextRequest,
     IntegrationResult,
-    QuorumOrchestrator,
+    QOrchestrator,
     SpeakCommand,
     TranscriptSegment,
 )
+from .q_agent import QAgent
 
 __all__ = [
     # Main orchestrator — entry point for voice-bot integration
-    "QuorumOrchestrator",
+    "QOrchestrator",
+    # Agentic core
+    "QAgent",
     # Cross-branch dataclasses
     "TranscriptSegment",
     "SpeakCommand",
@@ -35,8 +37,6 @@ __all__ = [
     "IntegrationResult",
     "ActionRequest",
     # Sub-components (useful for testing individual layers)
-    "IntentDetector",
-    "Intent",
     "MeetingContext",
     "ModeManager",
 ]

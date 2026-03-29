@@ -1,0 +1,463 @@
+"""
+agent/q_agent.py — Agentic core for Q.
+
+Replaces the keyword-router + fixed intent handlers with a true tool-calling
+LLM loop. Q decides what tools to call, executes them, feeds results back,
+and produces a final spoken response.
+
+Loop:
+    user text
+        → LLM(system_prompt, conversation_history, tools)
+        → tool_call?  →  execute tool  →  feed result back  →  LLM
+        → final text response  →  speak
+
+Max iterations: 4 (prevents runaway loops)
+
+LLM providers (tried in order):
+    1. Hermes 3 via local Ollama  (/api/chat with tools)
+    2. OpenRouter                 (same OpenAI-compatible format)
+"""
+
+import asyncio
+import json
+import logging
+import os
+import time
+from typing import NamedTuple
+
+import aiohttp
+
+from .context import MeetingContext
+
+logger = logging.getLogger(__name__)
+
+# ── LLM config ────────────────────────────────────────────────────────────────
+
+_HERMES_HOST    = os.getenv("HERMES_HOST", "http://localhost:11434")
+_HERMES_CHAT    = f"{_HERMES_HOST}/api/chat"
+_HERMES_MODEL   = os.getenv("HERMES_MODEL", "hermes3")
+_HERMES_TIMEOUT = 8.0   # generous — tool calls need time
+
+_OPENROUTER_KEY   = os.getenv("OPENROUTER_API_KEY", "")
+_OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
+_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+
+_MAX_ITERATIONS = 4
+
+_SYSTEM_PROMPT = """\
+You are Q, an AI participant embedded in a live meeting.
+
+IMPORTANT: You MUST use the provided tools to answer questions. \
+Never answer from memory or make up data. \
+If someone asks for tasks, search results, PRs, or decisions — call the relevant tool first.
+
+Tools available:
+- search_asana           → find Asana tasks (returns task_gid, name, due date, assignee, url)
+- create_asana_task      → create a new Asana task
+- update_asana_task      → change due date, name, notes, or assignee on an EXISTING task (use task_gid from search_asana)
+- send_chat_message      → type a message (or URL) into the meeting chat
+- search_slack           → search Slack messages
+- search_notion          → search Notion docs
+- search_github          → search GitHub PRs/issues
+- log_decision           → log a meeting decision
+- search_past_meetings   → search past meeting history
+
+Rules:
+- ALWAYS call a tool before answering any question about tasks, docs, PRs, Slack, or past meetings.
+- To update a task: first call search_asana to get the task_gid, then call update_asana_task.
+- NEVER create a new task when asked to update an existing one.
+- When asked to send a link or URL to chat: call send_chat_message with the URL.
+- Keep spoken responses under 2 sentences after receiving tool results.
+- If a tool returns no results, say so in one sentence.
+- Do not narrate tool use ("Let me search..." — just call the tool silently).
+- NEVER include URLs, markdown links, or bullet formatting in your spoken response. Plain text only.
+- When listing tasks or results, say only the names separated by commas.
+- Reply in English only.
+"""
+
+# ── Tool definitions (OpenAI function-calling format) ─────────────────────────
+
+TOOLS: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_slack",
+            "description": "Search Slack messages for a topic or keyword.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search term"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_notion",
+            "description": "Search Notion documents, specs, wikis, and notes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search term"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_github",
+            "description": "Search GitHub pull requests and issues.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "PR number, branch name, or keyword"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_asana",
+            "description": "Search Asana for tasks matching a query.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Task name or keyword"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_asana_task",
+            "description": "Create a new task in Asana.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Task title"},
+                    "notes": {"type": "string", "description": "Optional task description or notes"},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_asana_task",
+            "description": "Update fields on an existing Asana task (due date, name, notes, assignee). Use task_gid from search_asana results. Never use this to create a task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_gid": {"type": "string", "description": "GID of the task to update"},
+                    "due_on":   {"type": "string", "description": "New due date YYYY-MM-DD, or empty string to clear"},
+                    "name":     {"type": "string", "description": "New task title"},
+                    "notes":    {"type": "string", "description": "New task notes/description"},
+                    "assignee": {"type": "string", "description": "'me' to assign to yourself, or a user GID"},
+                },
+                "required": ["task_gid"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_chat_message",
+            "description": "Send a message or URL into the meeting chat so participants can see and click it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string", "description": "Text or URL to send into the meeting chat"},
+                },
+                "required": ["message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "log_decision",
+            "description": "Log a decision that was made in the meeting.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "decision": {"type": "string", "description": "The decision text to log"}
+                },
+                "required": ["decision"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_past_meetings",
+            "description": "Search notes and summaries from past meetings.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Topic or keyword to search for"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+]
+
+
+def _clean_response(text: str) -> str:
+    """Strip trailing SKIP marker the LLM may append to an otherwise valid sentence."""
+    import re
+    cleaned = re.sub(r"[\s\n]+SKIP\s*$", "", text.strip(), flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
+def _clean_for_speech(text: str) -> str:
+    """
+    Remove markdown and URLs so TTS reads naturally.
+
+    - [label](url)  → label
+    - bare https?://... URLs → removed
+    - **bold** / *italic*   → plain text
+    - bullet lines (-, *, 1.) → comma-joined
+    - excess whitespace / newlines → single spaces
+    """
+    import re
+    # Markdown links → label only
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    # Bare URLs
+    text = re.sub(r"https?://\S+", "", text)
+    # Bold / italic markers
+    text = re.sub(r"\*{1,3}([^*]+)\*{1,3}", r"\1", text)
+    # Bullet list lines → collect items, join with comma
+    lines = text.splitlines()
+    items, rest = [], []
+    for line in lines:
+        stripped = line.strip()
+        if re.match(r"^[-*]\s+|^\d+\.\s+", stripped):
+            items.append(re.sub(r"^[-*\d.]+\s*", "", stripped))
+        else:
+            rest.append(stripped)
+    if items:
+        text = ", ".join(items) + (" " + " ".join(rest) if any(rest) else "")
+    else:
+        text = " ".join(rest)
+    # Collapse whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+class QResponse(NamedTuple):
+    """
+    Returned by QAgent.run().
+
+    spoken: short, URL-free text for TTS.
+    chat:   full response preserving markdown links for meeting chat.
+            None when nothing should be sent to chat.
+    """
+    spoken: str
+    chat: str | None = None
+
+
+# ── QAgent ────────────────────────────────────────────────────────────────────
+
+class QAgent:
+    """
+    Agentic loop for Q.
+
+    Given a user utterance and meeting context, calls the LLM with tools,
+    executes any tool calls, feeds results back, and returns the final
+    spoken response (or None if nothing should be said).
+
+    Usage:
+        agent = QAgent(context=meeting_context)
+        response = await agent.run(
+            user_text="Could you give me all my Asana tasks?",
+            meeting_id="abc123",
+            speaker="Abhinav",
+        )
+        if response:
+            await speak(response)
+    """
+
+    def __init__(self, context: MeetingContext) -> None:
+        self._context = context
+        # Tool executors are injected at runtime to avoid circular imports
+        self._tool_fns: dict = {}
+
+    def register_tools(self, tool_fns: dict) -> None:
+        """
+        Register async callables for each tool name.
+
+        Args:
+            tool_fns: dict mapping tool name → async callable.
+                      e.g. {"search_slack": search_slack_fn, ...}
+        """
+        self._tool_fns = tool_fns
+
+    async def run(
+        self,
+        user_text: str,
+        meeting_id: str,
+        speaker: str = "Participant",
+    ) -> QResponse | None:
+        """
+        Run the agentic loop for a single user utterance.
+
+        Args:
+            user_text:  The spoken text to respond to.
+            meeting_id: Active meeting session ID.
+            speaker:    Speaker name for context.
+
+        Returns:
+            QResponse(spoken, chat), or None if Q should stay quiet.
+            spoken — clean text for TTS (no URLs or markdown).
+            chat   — full response with URLs for meeting chat, or None if
+                     the spoken version already contains everything.
+        """
+        recent = self._context.get_recent_transcript(meeting_id, n=6)
+
+        system_with_context = (
+            f"{_SYSTEM_PROMPT}\n\n"
+            f"Current meeting ID: {meeting_id}\n"
+            f"Recent transcript:\n{recent}"
+        )
+
+        messages = [
+            {"role": "system", "content": system_with_context},
+            {"role": "user",   "content": f"{speaker}: {user_text}"},
+        ]
+
+        for iteration in range(_MAX_ITERATIONS):
+            response = await self._call_llm(messages)
+            if response is None:
+                logger.error("[%s] LLM call failed on iteration %d", meeting_id, iteration)
+                return QResponse(spoken="I wasn't able to process that right now.")
+
+            tool_calls = response.get("tool_calls") or []
+            content    = (response.get("content") or "").strip()
+
+            if not tool_calls:
+                # No more tool calls — this is the final response
+                if not content or content.upper() == "SKIP":
+                    return None
+                cleaned = _clean_response(content)
+                spoken  = _clean_for_speech(cleaned)
+                # Only send to chat if the full version differs (i.e. has URLs/links)
+                chat = cleaned if cleaned != spoken else None
+                return QResponse(spoken=spoken, chat=chat)
+
+            # Execute all tool calls in parallel
+            logger.info(
+                "[%s] Agent iteration %d — calling tools: %s",
+                meeting_id,
+                iteration,
+                [tc["function"]["name"] for tc in tool_calls],
+            )
+
+            tool_results = await asyncio.gather(
+                *[self._execute_tool(tc, meeting_id) for tc in tool_calls],
+                return_exceptions=True,
+            )
+
+            # Add assistant message with tool_calls
+            messages.append({
+                "role": "assistant",
+                "content": content,
+                "tool_calls": tool_calls,
+            })
+
+            # Add tool result messages
+            for tc, result in zip(tool_calls, tool_results):
+                tool_id   = tc.get("id", tc["function"]["name"])
+                tool_name = tc["function"]["name"]
+                if isinstance(result, Exception):
+                    result_text = f"Error: {result}"
+                else:
+                    result_text = str(result)
+                logger.info("[%s] Tool %r → %r", meeting_id, tool_name, result_text[:120])
+                messages.append({
+                    "role":         "tool",
+                    "tool_call_id": tool_id,
+                    "name":         tool_name,
+                    "content":      result_text,
+                })
+
+        logger.warning("[%s] Agent hit max iterations (%d)", meeting_id, _MAX_ITERATIONS)
+        return QResponse(spoken="I wasn't able to complete that in time.")
+
+    async def _execute_tool(self, tool_call: dict, meeting_id: str) -> str:
+        """Execute a single tool call and return a string result."""
+        fn_info = tool_call.get("function", {})
+        name    = fn_info.get("name", "")
+        try:
+            args = json.loads(fn_info.get("arguments", "{}"))
+        except json.JSONDecodeError:
+            return "Error: could not parse tool arguments."
+
+        fn = self._tool_fns.get(name)
+        if fn is None:
+            return f"Error: unknown tool '{name}'."
+
+        try:
+            result = await fn(meeting_id=meeting_id, **args)
+            return result
+        except Exception as exc:
+            logger.error("Tool %r raised: %s", name, exc)
+            return f"Error running {name}: {exc}"
+
+    # ── LLM callers ───────────────────────────────────────────────────────────
+
+    async def _call_llm(self, messages: list[dict]) -> dict | None:
+        """Try Hermes first, fall back to OpenRouter. Returns the message dict."""
+        try:
+            return await self._call_hermes(messages)
+        except Exception as exc:
+            logger.warning("Agent: Hermes unavailable (%s) — falling back to OpenRouter", exc)
+
+        try:
+            return await self._call_openrouter(messages)
+        except Exception as exc:
+            logger.error("Agent: OpenRouter also failed: %s", exc)
+            return None
+
+    async def _call_hermes(self, messages: list[dict]) -> dict:
+        payload = {
+            "model":    _HERMES_MODEL,
+            "messages": messages,
+            "tools":    TOOLS,
+            "stream":   False,
+        }
+        timeout = aiohttp.ClientTimeout(total=_HERMES_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(_HERMES_CHAT, json=payload) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+                return data["message"]
+
+    async def _call_openrouter(self, messages: list[dict]) -> dict:
+        if not _OPENROUTER_KEY:
+            raise ValueError("OPENROUTER_API_KEY not set")
+        headers = {
+            "Authorization": f"Bearer {_OPENROUTER_KEY}",
+            "Content-Type":  "application/json",
+        }
+        payload = {
+            "model":       _OPENROUTER_MODEL,
+            "messages":    messages,
+            "tools":       TOOLS,
+            "tool_choice": "auto",
+        }
+        timeout = aiohttp.ClientTimeout(total=30.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(_OPENROUTER_URL, json=payload, headers=headers) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+                return data["choices"][0]["message"]

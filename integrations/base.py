@@ -51,6 +51,26 @@ async def safe_get(
         return None
 
 
+async def safe_put(
+    url: str,
+    headers: dict,
+    json_body: dict,
+    timeout: float = _DEFAULT_TIMEOUT,
+) -> Any | None:
+    """Async HTTP PUT with JSON body. Returns parsed JSON or None on error."""
+    try:
+        client_timeout = aiohttp.ClientTimeout(total=timeout)
+        async with aiohttp.ClientSession(timeout=client_timeout) as session:
+            async with session.put(url, headers=headers, json=json_body) as resp:
+                if not resp.ok:
+                    logger.warning("safe_put %s returned HTTP %d", url, resp.status)
+                    return None
+                return await resp.json()
+    except Exception as exc:
+        logger.warning("safe_put %s failed: %s", url, exc)
+        return None
+
+
 async def safe_post(
     url: str,
     headers: dict,

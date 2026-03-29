@@ -1,7 +1,7 @@
 """
 main_bot.py — Quorum entry point.
 
-Wires RecallClient, DeepgramTranscriber, QuorumSpeaker, and AudioStreamManager
+Wires RecallClient, DeepgramTranscriber, QSpeaker, and AudioStreamManager
 into a single bot that joins a meeting, listens, and speaks back.
 
 Run with:
@@ -21,14 +21,18 @@ load_dotenv(override=True)
 from bot import BotStatus, TranscriptSegment
 from bot.audio_stream import AudioStreamManager, get_app
 from bot.recall_client import RecallClient
-from voice.speak import QuorumSpeaker
+from voice.speak import QSpeaker
 from voice.transcribe import DeepgramTranscriber
 
 # Agent brain
-from agent import QuorumOrchestrator, SpeakCommand, ContextRequest, ActionRequest, IntegrationResult
+from agent import QOrchestrator, QAgent, SpeakCommand, ContextRequest, ActionRequest, IntegrationResult
 
 # Integrations
 from integrations import integration_callback
+from integrations.github import search_github
+from integrations.notion import search_notion
+from integrations.slack import search_slack
+from integrations.asana import search_asana, create_asana_task, update_asana_task
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -46,11 +50,27 @@ _DEEPGRAM_API_KEY   = os.getenv("DEEPGRAM_API_KEY", "").strip()
 _ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "").strip()
 _ELEVENLABS_VOICE   = os.getenv("ELEVENLABS_VOICE_ID", "").strip()
 _WEBHOOK_BASE_URL   = os.getenv("WEBHOOK_BASE_URL", "").strip()
-_BOT_NAME           = os.getenv("BOT_NAME", "Quorum").strip()
+_BOT_NAME           = os.getenv("BOT_NAME", "Q").strip()
 _SERVER_PORT        = int(os.getenv("SERVER_PORT", "8000"))
 
 
-class QuorumBot:
+def _fmt_results(results: list) -> str:
+    """Format a list[IntegrationResult] into a readable string for the LLM."""
+    if not results:
+        return "No results found."
+    lines = []
+    for r in results:
+        line = f"- [{r.source}] {r.title}: {r.summary}"
+        if r.url:
+            line += f" | url: {r.url}"
+        # Expose task GID so the LLM can call update_asana_task
+        if r.source == "asana" and isinstance(r.raw_data, dict) and r.raw_data.get("gid"):
+            line += f" | task_gid: {r.raw_data['gid']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+class QBot:
     """
     Top-level orchestrator that wires all Quorum subsystems together.
 
@@ -74,7 +94,7 @@ class QuorumBot:
             bot_name=_BOT_NAME,
         )
 
-        self._speaker = QuorumSpeaker(
+        self._speaker = QSpeaker(
             api_key=_ELEVENLABS_API_KEY,
             voice_id=_ELEVENLABS_VOICE,
             inject_callback=self._inject_audio,
@@ -88,16 +108,76 @@ class QuorumBot:
         self._server_task: asyncio.Task | None = None
 
         # ── Agent orchestrator ────────────────────────────────────────────
-        self._orchestrator = QuorumOrchestrator(
+        self._orchestrator = QOrchestrator(
             speak_callback=self._speak_command,
             integration_callback=self._integration_stub,
             action_callback=self._action_stub,
+            chat_callback=self._send_chat,
         )
+
+        # ── QAgent with tool registrations ───────────────────────────────
+        context = self._orchestrator._context
+        agent = QAgent(context=context)
+
+        async def _tool_search_slack(meeting_id: str, query: str) -> str:
+            return _fmt_results(await search_slack(query))
+
+        async def _tool_search_notion(meeting_id: str, query: str) -> str:
+            return _fmt_results(await search_notion(query))
+
+        async def _tool_search_github(meeting_id: str, query: str) -> str:
+            return _fmt_results(await search_github(query))
+
+        async def _tool_search_asana(meeting_id: str, query: str) -> str:
+            return _fmt_results(await search_asana(query))
+
+        async def _tool_create_asana_task(meeting_id: str, title: str, notes: str = "") -> str:
+            return await create_asana_task(title, notes)
+
+        async def _tool_update_asana_task(
+            meeting_id: str,
+            task_gid: str,
+            due_on: str | None = None,
+            name: str | None = None,
+            notes: str | None = None,
+            assignee: str | None = None,
+        ) -> str:
+            return await update_asana_task(
+                task_gid, due_on=due_on or None, name=name or None,
+                notes=notes or None, assignee=assignee or None,
+            )
+
+        async def _tool_send_chat_message(meeting_id: str, message: str) -> str:
+            if self._bot_status and self._bot_status.bot_id:
+                await self._recall.send_chat_message(self._bot_status.bot_id, message)
+                return "Message sent to meeting chat."
+            return "Error: bot not active."
+
+        async def _tool_log_decision(meeting_id: str, decision: str) -> str:
+            context.add_decision(decision, meeting_id)
+            return f"Decision logged: {decision}"
+
+        async def _tool_search_past_meetings(meeting_id: str, query: str) -> str:
+            return context.search_past_meetings(query)
+
+        agent.register_tools({
+            "search_slack":          _tool_search_slack,
+            "search_notion":         _tool_search_notion,
+            "search_github":         _tool_search_github,
+            "search_asana":          _tool_search_asana,
+            "create_asana_task":     _tool_create_asana_task,
+            "update_asana_task":     _tool_update_asana_task,
+            "send_chat_message":     _tool_send_chat_message,
+            "log_decision":          _tool_log_decision,
+            "search_past_meetings":  _tool_search_past_meetings,
+        })
+
+        self._orchestrator.set_agent(agent)
 
         # Wire the segment callback into the manager
         self._manager.register_segment_callback(self.on_transcript_segment)
 
-        logger.info("QuorumBot initialised")
+        logger.info("QBot initialised")
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -118,7 +198,7 @@ class QuorumBot:
         """
         self._meeting_id = str(uuid.uuid4())[:8]  # short ID for readability
 
-        logger.info("Quorum is starting up...")
+        logger.info("Q is starting up...")
         logger.info("Meeting ID : %s", self._meeting_id)
         logger.info("Health URL : %s/health", _WEBHOOK_BASE_URL)
 
@@ -166,7 +246,7 @@ class QuorumBot:
         """
         Leave the meeting and shut down all subsystems cleanly.
         """
-        logger.info("Quorum is leaving the meeting...")
+        logger.info("Q is leaving the meeting...")
 
         if self._bot_status and self._bot_status.bot_id:
             await self._recall.leave_meeting(self._bot_status.bot_id)
@@ -186,7 +266,7 @@ class QuorumBot:
         if self._meeting_id:
             await self._orchestrator.end_meeting(self._meeting_id)
         self._manager.end_session()
-        logger.info("Quorum has left the meeting")
+        logger.info("Q has left the meeting")
 
     # ── Transcript handler ────────────────────────────────────────────────────
 
@@ -231,13 +311,20 @@ class QuorumBot:
         logger.info("Action request (stub): type=%s params=%s", req.action_type, req.parameters)
         return {"status": "stub", "action_type": req.action_type}
 
+    async def _send_chat(self, meeting_id: str, text: str) -> None:
+        """Send a chat message into the meeting (URLs and full content preserved)."""
+        if self._bot_status and self._bot_status.bot_id:
+            await self._recall.send_chat_message(self._bot_status.bot_id, text)
+        else:
+            logger.warning("_send_chat: no active bot — dropping message")
+
     # ── Audio injection ───────────────────────────────────────────────────────
 
     async def _inject_audio(self, audio_bytes: bytes) -> None:
         """
         Inject MP3 audio bytes into the meeting via Recall.ai.
 
-        This is the inject_callback passed to QuorumSpeaker. Called
+        This is the inject_callback passed to QSpeaker. Called
         automatically after ElevenLabs generates audio.
 
         Args:
@@ -253,7 +340,7 @@ class QuorumBot:
 
 _ASCII_HEADER = """
 =================================
-       Q U O R U M
+           Q
   AI Meeting Participant
 =================================
 """
@@ -261,7 +348,7 @@ _ASCII_HEADER = """
 
 async def _main() -> None:
     """Async entry point — prompt for URL and start the bot."""
-    bot = QuorumBot()
+    bot = QBot()
     url = input("Paste your meeting URL: ").strip()
     if not url:
         print("[ERROR] No URL provided — exiting")
