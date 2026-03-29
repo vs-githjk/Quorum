@@ -33,6 +33,7 @@ from integrations.github import search_github
 from integrations.notion import search_notion
 from integrations.slack import search_slack
 from integrations.asana import search_asana, create_asana_task, update_asana_task
+from integrations.gmail import search_gmail, send_email
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -270,12 +271,20 @@ class QBot:
             await _ensure_novnc_link(meeting_id)
             return f"Visualization rendered on screen: {description}"
 
+        async def _tool_search_gmail(meeting_id: str, query: str) -> str:
+            return _fmt_results(await search_gmail(query))
+
+        async def _tool_send_email(meeting_id: str, to: str, subject: str, body: str) -> str:
+            return await send_email(to, subject, body)
+
         async def _tool_get_screen_link(meeting_id: str) -> str:
             base = _SCREEN_API_URL.rsplit(":", 1)[0]
             return f"{base}:6080/vnc.html?autoconnect=1&resize=scale&view_only=0"
 
         agent.register_tools({
             "get_screen_link":       _tool_get_screen_link,
+            "search_gmail":          _tool_search_gmail,
+            "send_email":            _tool_send_email,
             "search_slack":          _tool_search_slack,
             "search_notion":         _tool_search_notion,
             "search_github":         _tool_search_github,

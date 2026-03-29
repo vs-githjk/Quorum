@@ -59,6 +59,8 @@ Tools available:
 - search_slack           → search Slack messages
 - search_notion          → search Notion docs
 - search_github          → search GitHub PRs/issues
+- search_gmail           → search Gmail inbox for emails matching a query
+- send_email             → send an email from the Q Gmail account
 - log_decision           → log a meeting decision
 - search_past_meetings   → search past meeting history
 - open_on_screen         → open a URL in the shared meeting browser (visible to all via noVNC)
@@ -66,7 +68,9 @@ Tools available:
 - render_visualization   → generate and display a data visualization from meeting context
 
 Rules:
-- ALWAYS call a tool before answering any question about tasks, docs, PRs, Slack, or past meetings.
+- ALWAYS call a tool before answering any question about tasks, docs, PRs, Slack, email, or past meetings.
+- To send an email: call send_email with to, subject, and body. Confirm with the speaker before sending if the recipient or content is ambiguous.
+- To check email: call search_gmail with a relevant query.
 - To update a task: first call search_asana to get the task_gid, then call update_asana_task.
 - NEVER create a new task when asked to update an existing one.
 - When asked to send a link or URL to chat: call send_chat_message with the URL.
@@ -183,6 +187,36 @@ TOOLS: list[dict] = [
                     "assignee": {"type": "string", "description": "'me' to assign to yourself, or a user GID"},
                 },
                 "required": ["task_gid"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_gmail",
+            "description": "Search the Q Gmail inbox for emails matching a query.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search term, e.g. 'from:bob subject:budget'"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_email",
+            "description": "Send an email from the Q Gmail account.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to":      {"type": "string", "description": "Recipient email address"},
+                    "subject": {"type": "string", "description": "Email subject line"},
+                    "body":    {"type": "string", "description": "Plain-text email body"},
+                },
+                "required": ["to", "subject", "body"],
             },
         },
     },
