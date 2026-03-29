@@ -334,7 +334,12 @@ class QBot:
         logger.info("Joining meeting: %s", meeting_url)
         novnc_base = _SCREEN_API_URL.rsplit(":", 1)[0]
         novnc_link = f"{novnc_base}:6080/vnc.html?autoconnect=1&resize=scale&view_only=0"
-        _join_msg = f"Hey! I'm Q 👋 — your AI meeting assistant.\n\nShared browser (for screen actions): {novnc_link}"
+        # Recall.ai blocks localhost URLs in payloads — only embed the noVNC
+        # link if it's a real public URL, otherwise send a plain greeting.
+        if novnc_link.startswith("https://"):
+            _join_msg = f"Hey! I'm Q 👋 — your AI meeting assistant.\n\nShared browser (for screen actions): {novnc_link}"
+        else:
+            _join_msg = "Hey! I'm Q 👋 — your AI meeting assistant."
         self._bot_status = await self._recall.join_meeting(
             meeting_url, self._meeting_id, join_message=_join_msg
         )
