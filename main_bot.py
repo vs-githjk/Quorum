@@ -180,11 +180,14 @@ class QBot:
 
         async def _tool_open_on_screen(meeting_id: str, url: str) -> str:
             from integrations.base import safe_post
-            resp = await safe_post(f"{_SCREEN_API_URL}/open", {"url": url})
+            import urllib.parse as _urlparse
+            # Use hostname as tab name so each domain gets its own tab
+            tab = _urlparse.urlparse(url).netloc or url[:30]
+            resp = await safe_post(f"{_SCREEN_API_URL}/open", {"url": url, "tab": tab})
             if resp is None:
                 return "Error: screen container unreachable."
             await _ensure_novnc_link(meeting_id)
-            return f"Opened {url} on screen."
+            return f"Opened {url} on screen (tab: {tab})."
 
         async def _tool_act_on_screen(meeting_id: str, instruction: str) -> str:
             import json as _json
