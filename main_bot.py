@@ -114,6 +114,7 @@ class QBot:
         self._meeting_id: str | None = None
         self._server_task: asyncio.Task | None = None
         self._screen_action_running: bool = False
+        self._screen_link_sent: set[str] = set()
 
         # ── Agent orchestrator ────────────────────────────────────────────
         self._orchestrator = QOrchestrator(
@@ -168,15 +169,13 @@ class QBot:
         async def _tool_search_past_meetings(meeting_id: str, query: str) -> str:
             return context.search_past_meetings(query)
 
-        _screen_link_sent: set[str] = set()
-
         def _novnc_url() -> str:
             base = _SCREEN_API_URL.rsplit(":", 1)[0]
             return f"{base}:6080/vnc.html?autoconnect=1&resize=scale&view_only=0"
 
         async def _ensure_novnc_link(meeting_id: str) -> None:
-            if meeting_id not in _screen_link_sent:
-                _screen_link_sent.add(meeting_id)
+            if meeting_id not in self._screen_link_sent:
+                self._screen_link_sent.add(meeting_id)
                 await self._send_chat(meeting_id, f"Screen sharing active: {_novnc_url()}")
 
         async def _tool_open_on_screen(meeting_id: str, url: str) -> str:
@@ -340,6 +339,17 @@ class QBot:
         # ── Step 4: Register session with manager + agent ────────────────
         self._manager.start_session(self._meeting_id, self._bot_status.bot_id)
         await self._orchestrator.start_meeting(self._meeting_id)
+
+        # ── Step 4b: Greet the meeting and share the noVNC link ───────────
+        await asyncio.sleep(3)   # give Recall a moment to fully admit the bot
+        await self._speaker.speak("Hey everyone, I'm Q, your AI meeting assistant. Ask me anything.")
+        novnc_base = _SCREEN_API_URL.rsplit(":", 1)[0]
+        novnc_link = f"{novnc_base}:6080/vnc.html?autoconnect=1&resize=scale&view_only=0"
+        await self._send_chat(
+            self._meeting_id,
+            f"Hey! I'm Q 👋 — your AI meeting assistant.\n\nShared browser (for screen actions): {novnc_link}",
+        )
+        self._screen_link_sent.add(self._meeting_id)
 
         # ── Step 5: Keep running until interrupted ────────────────────────
         try:
