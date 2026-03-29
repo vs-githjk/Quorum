@@ -64,6 +64,10 @@ Tools available:
 - open_on_screen         → open a URL in the shared meeting browser (visible to all via noVNC)
 - act_on_screen          → perform any task in the browser using vision (search, interact, fill forms, navigate)
 - render_visualization   → generate and display a data visualization from meeting context
+- draft_email            → compose and open a Gmail draft with a given subject and body
+- create_calendar_event  → create a Google Calendar event with title, date, time, and optional guests
+- summarize_meeting      → summarize the current meeting transcript into decisions, action items, and key points
+- ask_claude             → ask Claude a question or get help with writing, reasoning, or analysis
 
 Rules:
 - ALWAYS call a tool before answering any question about tasks, docs, PRs, Slack, or past meetings.
@@ -76,6 +80,10 @@ Rules:
 - After any screen action completes, always tell the user it is visible in the noVNC window and include the noVNC link in your response.
 - When asked to "show" something that was already rendered or opened on screen: do NOT call any tools — just tell the user it is already visible in the noVNC window.
 - When numbers, revenue, metrics, or data are discussed and a chart/visualization is requested: call render_visualization.
+- When asked to write, send, compose, or draft an email: call draft_email.
+- When asked to schedule, book, or create a meeting/event/call: call create_calendar_event.
+- When asked to summarize the meeting, recap what was discussed, or generate meeting notes: call summarize_meeting.
+- When asked for help writing something, reasoning through a problem, or anything that needs Claude's intelligence: call ask_claude.
 - Keep spoken responses under 2 sentences after receiving tool results.
 - If a tool returns no results, say so in one sentence.
 - Do not narrate tool use ("Let me search..." — just call the tool silently).
@@ -269,6 +277,73 @@ TOOLS: list[dict] = [
                     },
                 },
                 "required": ["description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "draft_email",
+            "description": "Compose a Gmail draft and open it in the browser. Use when asked to write, draft, send, or compose an email.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to":      {"type": "string", "description": "Recipient email address"},
+                    "subject": {"type": "string", "description": "Email subject line"},
+                    "body":    {"type": "string", "description": "Full email body text"},
+                },
+                "required": ["to", "subject", "body"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_calendar_event",
+            "description": "Create a Google Calendar event. Use when asked to schedule, book, or create a meeting, call, or event.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title":  {"type": "string", "description": "Event title"},
+                    "date":   {"type": "string", "description": "Date in natural language, e.g. 'Friday', 'March 31', 'tomorrow'"},
+                    "time":   {"type": "string", "description": "Time in natural language, e.g. '2pm', '14:00', '3:30pm'"},
+                    "guests": {"type": "string", "description": "Comma-separated guest email addresses (optional)"},
+                },
+                "required": ["title", "date", "time"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "summarize_meeting",
+            "description": "Summarize the current meeting into decisions made, action items, and key discussion points. Use when asked to recap, summarize, or generate meeting notes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "focus": {
+                        "type": "string",
+                        "description": "Optional — what to focus on, e.g. 'action items only' or 'technical decisions'. Leave empty for a full summary.",
+                    }
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_claude",
+            "description": "Ask Claude for help with writing, analysis, reasoning, or any question. Use for drafting docs, PRDs, emails, brainstorming, or anything that needs AI assistance.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "The full question or request for Claude",
+                    }
+                },
+                "required": ["prompt"],
             },
         },
     },

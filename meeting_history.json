@@ -111,5 +111,51 @@
     "tool_actions": [],
     "action_count": 0,
     "transcript_snippet": "Hey, Quorum. Can you open Amazon? Hey, queue. Can you open Amazon? If there's another, I have to place the link in the chat before it starts. No? Oh, yeah. We'll figure that out. You said screen share? Yeah. Not not screen sharing. Oh, we need to figure out do we need to figure out screen sharing? Else here. I'll give the link of this Everyone can just control terminal. Oh, true. Yeah. Everyone can control. That's fine. I think it's fine. I think I have, like, the screen share screen. Like once "
+  },
+  "03795ac2": {
+    "meeting_id": "03795ac2",
+    "date": "2026-03-29",
+    "summary": "Summary unavailable \u2014 LLM unreachable.",
+    "decisions": [],
+    "tool_actions": [
+      "[act_on_screen] Done.",
+      "[act_on_screen] Done.",
+      "[act_on_screen] Done."
+    ],
+    "action_count": 0,
+    "transcript_snippet": "You Thank you. Open cloud. And draft a mail ask her to draft a mail to send to my boss about a leave. And then from the Gmail, draft a mail in Gmail. Okay. Use Claude to make the email. And then paste it back into the Gmail. Hey, queue. Log in into cloud."
+  },
+  "a77fa2e1": {
+    "meeting_id": "a77fa2e1",
+    "date": "2026-03-29",
+    "summary": "Summary unavailable \u2014 LLM unreachable.",
+    "decisions": [],
+    "tool_actions": [
+      "[draft_email] Done.",
+      "[draft_email] Done.",
+      "[ask_claude] Subject: Request for Leave\n\nDear Professor [Last Name],\n\nI hope this message finds you well. I am writing to formally request a leave of absence from class on [insert dates], due to [briefly explain y"
+    ],
+    "action_count": 0,
+    "transcript_snippet": "Okay. I've registered. Now what? Hey, Quorum. Write a mail to my professor asking for a leave. I can't see the mail. Can you draft it again? Write a draft. Please. Something in this, description."
+  },
+  "0a2985d2": {
+    "meeting_id": "0a2985d2",
+    "date": "2026-03-29",
+    "summary": "Summary unavailable \u2014 LLM unreachable.",
+    "decisions": [],
+    "tool_actions": [],
+    "action_count": 0,
+    "transcript_snippet": ""
+  },
+  "c404694c": {
+    "meeting_id": "c404694c",
+    "date": "2026-03-29",
+    "summary": "Summary unavailable \u2014 LLM unreachable.",
+    "decisions": [],
+    "tool_actions": [
+      "[draft_email] Done."
+    ],
+    "action_count": 0,
+    "transcript_snippet": "Hey, Quorum. Write a draft mail to my process professor asking for relief."
   }
 }

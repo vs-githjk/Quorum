@@ -262,6 +262,74 @@ class QBot:
             await _ensure_novnc_link(meeting_id)
             return f"Visualization rendered on screen: {description}"
 
+        async def _tool_draft_email(meeting_id: str, to: str, subject: str, body: str) -> str:
+            instruction = (
+                f"Open Gmail (mail.google.com) and compose a new email. "
+                f"Fill in: To: {to}, Subject: {subject}, Body: {body}. "
+                f"Leave it open as a draft, do not send."
+            )
+            return await _tool_act_on_screen(meeting_id=meeting_id, instruction=instruction)
+
+        async def _tool_create_calendar_event(
+            meeting_id: str, title: str, date: str, time: str, guests: str = ""
+        ) -> str:
+            guest_part = f" Add guests: {guests}." if guests else ""
+            instruction = (
+                f"Open Google Calendar (calendar.google.com) and create a new event. "
+                f"Title: {title}. Date: {date}. Time: {time}.{guest_part} "
+                f"Save the event."
+            )
+            return await _tool_act_on_screen(meeting_id=meeting_id, instruction=instruction)
+
+        async def _tool_summarize_meeting(meeting_id: str, focus: str = "") -> str:
+            if not _OPENROUTER_KEY:
+                return "Error: OPENROUTER_API_KEY not set."
+            transcript = context.get_recent_transcript(meeting_id, n=50)
+            decisions  = context.get_decisions(meeting_id)
+            focus_line = f"\nFocus on: {focus}" if focus else ""
+            prompt = (
+                f"You are summarizing a live meeting. Produce a concise summary with three sections:\n"
+                f"**Decisions made**, **Action items**, **Key discussion points**.{focus_line}\n\n"
+                f"Transcript:\n{transcript}\n\n"
+                f"Decisions logged:\n{chr(10).join(decisions) if decisions else 'None'}"
+            )
+            headers = {"Authorization": f"Bearer {_OPENROUTER_KEY}", "Content-Type": "application/json"}
+            payload = {
+                "model": _OPENROUTER_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            import aiohttp as _aio
+            async with _aio.ClientSession() as session:
+                async with session.post(_OPENROUTER_URL, json=payload, headers=headers) as r:
+                    data = await r.json()
+            summary = data["choices"][0]["message"]["content"].strip()
+            if self._bot_status and self._bot_status.bot_id:
+                await self._recall.send_chat_message(self._bot_status.bot_id, summary)
+            return summary
+
+        async def _tool_ask_claude(meeting_id: str, prompt: str) -> str:
+            if not _OPENROUTER_KEY:
+                return "Error: OPENROUTER_API_KEY not set."
+            transcript = context.get_recent_transcript(meeting_id, n=10)
+            system = (
+                "You are Q, an AI assistant embedded in a live meeting. "
+                "Answer concisely and helpfully. You have context from the current meeting."
+            )
+            messages = [
+                {"role": "system", "content": f"{system}\n\nRecent meeting context:\n{transcript}"},
+                {"role": "user", "content": prompt},
+            ]
+            headers = {"Authorization": f"Bearer {_OPENROUTER_KEY}", "Content-Type": "application/json"}
+            payload = {"model": _OPENROUTER_MODEL, "messages": messages}
+            import aiohttp as _aio
+            async with _aio.ClientSession() as session:
+                async with session.post(_OPENROUTER_URL, json=payload, headers=headers) as r:
+                    data = await r.json()
+            answer = data["choices"][0]["message"]["content"].strip()
+            if self._bot_status and self._bot_status.bot_id:
+                await self._recall.send_chat_message(self._bot_status.bot_id, answer)
+            return answer
+
         agent.register_tools({
             "search_slack":          _tool_search_slack,
             "search_notion":         _tool_search_notion,
@@ -275,6 +343,10 @@ class QBot:
             "open_on_screen":        _tool_open_on_screen,
             "act_on_screen":         _tool_act_on_screen,
             "render_visualization":  _tool_render_visualization,
+            "draft_email":           _tool_draft_email,
+            "create_calendar_event": _tool_create_calendar_event,
+            "summarize_meeting":     _tool_summarize_meeting,
+            "ask_claude":            _tool_ask_claude,
         })
 
         self._orchestrator.set_agent(agent)

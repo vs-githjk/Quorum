@@ -46,6 +46,7 @@ DISPLAY          = os.environ.get("DISPLAY", ":99")
 OPENROUTER_KEY   = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.environ.get("VISION_MODEL", os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o"))
 OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
+CHROME_PROFILE   = "/chrome-profile"
 
 # ── Playwright thread + queue ─────────────────────────────────────────────────
 
@@ -58,8 +59,9 @@ def _pw_worker():
     global _page
     logger.info("Playwright thread starting (DISPLAY=%s)", DISPLAY)
     pw = sync_playwright().start()
+    os.makedirs(CHROME_PROFILE, exist_ok=True)
     ctx = pw.chromium.launch_persistent_context(
-        user_data_dir="/tmp/chromium-profile",
+        user_data_dir=CHROME_PROFILE,
         headless=False,
         args=[
             "--no-sandbox",
@@ -122,9 +124,11 @@ Action formats:
 {"action": "error", "summary": "Why the task cannot be completed"}
 
 Rules:
-- Prefer specific CSS selectors (id, name, aria-label) over generic ones
-- Use "click_text" when you can only identify an element by its visible label
+- For buttons with visible labels ("Next", "Sign in", "Continue", "Submit"): always use "click_text" not CSS selectors
+- For input fields: prefer selectors with type, name, or aria-label (e.g. input[type="email"])
+- Use CSS selectors only for elements with no visible text label
 - After typing into a search field, always follow with {"action": "key", "key": "Enter"}
+- For contenteditable areas (e.g. Gmail email body): use {"action": "type", "selector": "div[contenteditable='true'][aria-label]", ...} — do NOT skip typing the body
 - Use "wait" when a page appears to still be loading
 - Use "done" ONLY when the task is fully complete and visible on screen — not after just navigating or typing
 - If you just navigated or typed but the result isn't visible yet, use "wait" or continue with the next action
@@ -156,7 +160,15 @@ def _execute_action(action_data: dict) -> None:
         _page.get_by_text(action_data["text"]).first.click(timeout=5000)
 
     elif action == "type":
-        _page.fill(action_data["selector"], action_data["text"], timeout=5000)
+        selector = action_data["selector"]
+        text     = action_data["text"]
+        try:
+            _page.fill(selector, text, timeout=5000)
+        except Exception:
+            # contenteditable elements (e.g. Gmail body) don't support fill —
+            # click to focus then type character by character
+            _page.click(selector, timeout=5000)
+            _page.keyboard.type(text, delay=20)
 
     elif action == "key":
         _page.keyboard.press(action_data["key"])

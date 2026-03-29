@@ -8,4 +8,9 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-openai/gpt-4o-mini}
       - VISION_MODEL=${VISION_MODEL:-openai/gpt-4o}
+    volumes:
+      - chrome-profile:/chrome-profile
     restart: unless-stopped
+
+volumes:
+  chrome-profile:
