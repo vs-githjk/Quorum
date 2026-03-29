@@ -52,6 +52,7 @@ Never answer from memory or make up data. \
 If someone asks for tasks, search results, PRs, or decisions — call the relevant tool first.
 
 Tools available:
+- get_screen_link         → get the noVNC screen sharing link to send to participants
 - search_asana           → find Asana tasks (returns task_gid, name, due date, assignee, url)
 - create_asana_task      → create a new Asana task
 - update_asana_task      → change due date, name, notes, or assignee on an EXISTING task (use task_gid from search_asana)
@@ -109,6 +110,18 @@ Personality and tone:
 # ── Tool definitions (OpenAI function-calling format) ─────────────────────────
 
 TOOLS: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_screen_link",
+            "description": "Get the noVNC screen sharing link to send to meeting participants.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
