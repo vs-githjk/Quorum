@@ -381,10 +381,12 @@ class QBot:
             _link_msg = f"Shared browser (for screen actions): {novnc_link}"
 
             async def _send_novnc_link() -> None:
-                for _ in range(36):   # up to 6 min (36 × 10s)
+                # Google Meet chat API typically becomes available a few minutes
+                # after the bot joins. Try once per minute for up to 5 minutes.
+                for _ in range(5):
+                    await asyncio.sleep(60)
                     if await self._recall.send_chat_message(_bot_id, _link_msg, _silent=True):
                         return
-                    await asyncio.sleep(10)
                 logger.warning("noVNC link never delivered — chat API stayed unavailable")
 
             asyncio.create_task(_send_novnc_link())
