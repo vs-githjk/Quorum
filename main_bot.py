@@ -216,8 +216,12 @@ class QBot:
                                     text=event.get("description", ""),
                                     meeting_id=meeting_id,
                                 ))
-                            elif etype in ("done", "error"):
+                            elif etype == "done":
                                 summary = event.get("summary", "Done.")
+                                break
+                            elif etype == "error":
+                                summary = f"Screen action failed: {event.get('message', event.get('summary', 'unknown error'))}"
+                                logger.error("act_on_screen error: %s", summary)
                                 break
                             elif etype == "cancelled":
                                 summary = "Task cancelled."
