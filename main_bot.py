@@ -183,7 +183,7 @@ class QBot:
             import urllib.parse as _urlparse
             # Use hostname as tab name so each domain gets its own tab
             tab = _urlparse.urlparse(url).netloc or url[:30]
-            resp = await safe_post(f"{_SCREEN_API_URL}/open", {"url": url, "tab": tab})
+            resp = await safe_post(f"{_SCREEN_API_URL}/open", {}, {"url": url, "tab": tab})
             if resp is None:
                 return "Error: screen container unreachable."
             await _ensure_novnc_link(meeting_id)
@@ -258,7 +258,7 @@ class QBot:
             html = _re.sub(r"^```(?:html)?\s*", "", html.strip())
             html = _re.sub(r"\s*```$", "", html)
             from integrations.base import safe_post
-            result = await safe_post(f"{_SCREEN_API_URL}/render_html", {"html": html})
+            result = await safe_post(f"{_SCREEN_API_URL}/render_html", {}, {"html": html})
             if result is None:
                 return "Error: screen container unreachable."
             await _ensure_novnc_link(meeting_id)
@@ -344,8 +344,19 @@ class QBot:
         await self._orchestrator.start_meeting(self._meeting_id)
 
         # ── Step 4b: Greet the meeting and share the noVNC link ───────────
-        await asyncio.sleep(3)   # give Recall a moment to fully admit the bot
+        # Poll until Recall confirms the bot is in the meeting (up to 30s)
+        for _ in range(30):
+            bot_status = await self._recall.get_bot_status(self._bot_status.bot_id)
+            if bot_status.status == "active":
+                break
+            await asyncio.sleep(1)
+
+        # Extra buffer — Google Meet chat API isn't available the instant the
+        # bot status flips to active; give it a few more seconds to settle.
+        await asyncio.sleep(5)
         await self._speaker.speak("Hey everyone, I'm Q, your AI meeting assistant. Ask me anything.")
+        # Wait for audio injection to complete before sending chat
+        await asyncio.sleep(3)
         novnc_base = _SCREEN_API_URL.rsplit(":", 1)[0]
         novnc_link = f"{novnc_base}:6080/vnc.html?autoconnect=1&resize=scale&view_only=0"
         await self._send_chat(
@@ -421,7 +432,7 @@ class QBot:
 
     async def _cancel_screen_action(self) -> None:
         from integrations.base import safe_post
-        await safe_post(f"{_SCREEN_API_URL}/act/cancel", {})
+        await safe_post(f"{_SCREEN_API_URL}/act/cancel", {}, {})
         logger.info("Screen action cancelled by user speech")
         if self._meeting_id:
             await self._speak_command(SpeakCommand(text="Stopping.", meeting_id=self._meeting_id))

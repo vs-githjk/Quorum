@@ -29,6 +29,8 @@ Q_TRIGGERS = [
     "que", "hey que",
     "ku", "hey ku",
     "kew", "hey kew",
+    "queue", "hey queue",
+    "aq", "hey aq",
 ]
 
 # Default path for persisted mode; can be overridden via env var
