@@ -31,7 +31,7 @@ _VOICE_SETTINGS = VoiceSettings(stability=0.5, similarity_boost=0.75)
 _MAX_SENTENCES = 2
 
 
-class QuorumSpeaker:
+class QSpeaker:
     """
     Text-to-speech engine for Quorum using ElevenLabs.
 
@@ -40,7 +40,7 @@ class QuorumSpeaker:
     and is responsible for sending them to the meeting (via RecallClient).
 
     Usage:
-        speaker = QuorumSpeaker(api_key, voice_id, inject_callback)
+        speaker = QSpeaker(api_key, voice_id, inject_callback)
         await speaker.start()           # start queue worker
         await speaker.speak("Hello")    # queue a TTS request
         await speaker.stop()            # drain queue and stop
@@ -53,7 +53,7 @@ class QuorumSpeaker:
         inject_callback: Callable,
     ) -> None:
         """
-        Initialise QuorumSpeaker.
+        Initialise QSpeaker.
 
         Args:
             api_key:          ElevenLabs API key.
@@ -70,7 +70,7 @@ class QuorumSpeaker:
         self._running = False
 
         logger.info(
-            "QuorumSpeaker initialised — voice_id=%s model=%s",
+            "QSpeaker initialised — voice_id=%s model=%s",
             voice_id,
             _MODEL_ID,
         )
@@ -85,11 +85,11 @@ class QuorumSpeaker:
         only one worker runs at a time.
         """
         if self._running:
-            logger.warning("QuorumSpeaker already running")
+            logger.warning("QSpeaker already running")
             return
         self._running = True
         self._worker_task = asyncio.create_task(self._worker())
-        logger.info("QuorumSpeaker queue worker started")
+        logger.info("QSpeaker queue worker started")
 
     async def stop(self) -> None:
         """
@@ -106,7 +106,7 @@ class QuorumSpeaker:
                 await self._worker_task
             except asyncio.CancelledError:
                 pass
-        logger.info("QuorumSpeaker stopped")
+        logger.info("QSpeaker stopped")
 
     async def speak(self, text: str) -> None:
         """
@@ -252,7 +252,7 @@ class QuorumSpeaker:
 
 async def _run_test() -> None:
     """
-    Test QuorumSpeaker by generating a spoken phrase and saving it to MP3.
+    Test QSpeaker by generating a spoken phrase and saving it to MP3.
 
     Does NOT inject into a meeting — uses generate_only() so no bot or
     meeting session is needed.
@@ -277,13 +277,13 @@ async def _run_test() -> None:
         print("[ERROR] ELEVENLABS_VOICE_ID not set in .env")
         return
 
-    print("\n=== QuorumSpeaker test ===\n")
+    print("\n=== QSpeaker test ===\n")
 
     async def noop_inject(audio: bytes) -> None:
         """No-op inject callback for testing."""
         pass
 
-    speaker = QuorumSpeaker(
+    speaker = QSpeaker(
         api_key=api_key,
         voice_id=voice_id,
         inject_callback=noop_inject,
@@ -320,7 +320,7 @@ async def _run_test() -> None:
         "Third sentence that should be cut off. "
         "Fourth sentence also cut."
     )
-    truncated = QuorumSpeaker._enforce_sentence_limit(long_text)
+    truncated = QSpeaker._enforce_sentence_limit(long_text)
     sentences_out = len(re.split(r"(?<=[.!?])\s+", truncated.strip()))
     assert sentences_out <= _MAX_SENTENCES, f"Expected ≤{_MAX_SENTENCES} sentences, got {sentences_out}"
     print(f"\n[PASS] Sentence limit enforced: {truncated!r}")

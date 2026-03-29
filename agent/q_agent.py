@@ -73,6 +73,8 @@ Rules:
 - NEVER include URLs, markdown links, or bullet formatting in your spoken response. Plain text only.
 - When listing tasks or results, say only the names separated by commas.
 - Reply in English only.
+- Always address the speaker directly in second person ("I found...", "Done!", "Your tasks are..."). NEVER narrate or describe what the speaker is doing.
+- If the message is not a direct request to you (Q), respond with exactly: SKIP
 """
 
 # ── Tool definitions (OpenAI function-calling format) ─────────────────────────
@@ -330,10 +332,19 @@ class QAgent:
             f"Recent transcript:\n{recent}"
         )
 
+        # Inject the last 3 exchanges so Q remembers recent tool results
+        # (e.g. task_gid from a task just created, URLs, prior search results)
+        history = self._context.get_agent_history(meeting_id, n=3)
+        current_user_msg = {"role": "user", "content": f"{speaker}: {user_text}"}
+
         messages = [
             {"role": "system", "content": system_with_context},
-            {"role": "user",   "content": f"{speaker}: {user_text}"},
+            *history,
+            current_user_msg,
         ]
+
+        # Track where the current exchange starts so we can save just this turn
+        exchange_start = 1 + len(history)
 
         for iteration in range(_MAX_ITERATIONS):
             response = await self._call_llm(messages)
@@ -348,6 +359,9 @@ class QAgent:
                 # No more tool calls — this is the final response
                 if not content or content.upper() == "SKIP":
                     return None
+                # Append the final assistant message before saving
+                messages.append({"role": "assistant", "content": content})
+                self._context.add_agent_exchange(meeting_id, messages[exchange_start:])
                 cleaned = _clean_response(content)
                 spoken  = _clean_for_speech(cleaned)
                 # Only send to chat if the full version differs (i.e. has URLs/links)
@@ -391,6 +405,7 @@ class QAgent:
                 })
 
         logger.warning("[%s] Agent hit max iterations (%d)", meeting_id, _MAX_ITERATIONS)
+        self._context.add_agent_exchange(meeting_id, messages[exchange_start:])
         return QResponse(spoken="I wasn't able to complete that in time.")
 
     async def _execute_tool(self, tool_call: dict, meeting_id: str) -> str:

@@ -1,7 +1,7 @@
 """
-agent/mode.py — ModeManager for Quorum
+agent/mode.py — ModeManager for Q
 
-Controls whether Quorum responds proactively (ACTIVE) or only when
+Controls whether Q responds proactively (ACTIVE) or only when
 explicitly addressed (ON_DEMAND). Mode is persisted to mode_state.json
 so it survives process restarts.
 """
@@ -19,23 +19,9 @@ ACTIVE = "active"
 ON_DEMAND = "on_demand"
 VALID_MODES = {ACTIVE, ON_DEMAND}
 
-# Trigger phrases that count as addressing Quorum directly
-QUORUM_TRIGGERS = [
-    # Correct name
-    "quorum", "hey quorum",
-    # Common short forms
-    "hey q",
-    # Deepgram phonetic mishearings observed in the wild
-    "coram", "hey coram",
-    "cora", "hey cora",
-    "coron", "hey coron",
-    "corin", "hey corin",
-    "corum", "hey corum",
-    "colrum", "hey colrum",
-    "cole", "hey cole",
-    "goram", "hey goram",
-    "korem", "hey korem",
-    "korum", "hey korum",
+# Trigger phrases that count as addressing Q directly
+Q_TRIGGERS = [
+    "q", "hey q",
 ]
 
 # Default path for persisted mode; can be overridden via env var
@@ -47,7 +33,7 @@ class ModeManager:
     Manages the operational mode for the Quorum agent.
 
     ACTIVE    — Quorum speaks proactively whenever it has relevant context.
-    ON_DEMAND — Quorum only speaks when "Quorum" or "hey quorum" is detected
+    ON_DEMAND — Quorum only speaks when "Q" or "hey quorum" is detected
                 in the transcript (case-insensitive).
 
     Mode is written to a JSON file on every change so restarts pick up
@@ -118,7 +104,7 @@ class ModeManager:
             return result
 
         # ON_DEMAND: only act when explicitly addressed
-        addressed = self.is_addressed_to_quorum(transcript_text)
+        addressed = self.is_addressed_to_q(transcript_text)
         logger.debug(
             "ON_DEMAND mode — addressed=%s → respond=%s", addressed, addressed
         )
@@ -138,7 +124,7 @@ class ModeManager:
 
     # ── Helpers ──────────────────────────────────────────────────────────────
 
-    def is_addressed_to_quorum(self, text: str) -> bool:
+    def is_addressed_to_q(self, text: str) -> bool:
         """
         Return True if any Quorum trigger phrase appears in text.
 
@@ -151,13 +137,18 @@ class ModeManager:
             True if 'quorum' or 'hey quorum' is found (case-insensitive).
         """
         import re as _re
-        lowered = text.lower()
-        # Match on raw text first (fast path)
-        if any(trigger in lowered for trigger in QUORUM_TRIGGERS):
-            return True
-        # Strip punctuation and retry — catches "Hey, Q." → "hey q"
-        stripped = _re.sub(r"[^\w\s]", "", lowered)
-        return any(trigger in stripped for trigger in QUORUM_TRIGGERS)
+        # Normalise: strip punctuation, collapse whitespace
+        normalised = _re.sub(r"\s+", " ", _re.sub(r"[^\w\s]", " ", text.lower())).strip()
+        words = normalised.split()
+        # Use word-boundary matching — "q" must be a standalone word, not inside
+        # "request", "question", "quite" etc.
+        for trigger in Q_TRIGGERS:
+            trigger_words = trigger.split()
+            # Sliding window match
+            for i in range(len(words) - len(trigger_words) + 1):
+                if words[i:i + len(trigger_words)] == trigger_words:
+                    return True
+        return False
 
     # ── Persistence ──────────────────────────────────────────────────────────
 

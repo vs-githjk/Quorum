@@ -95,6 +95,15 @@ class MeetingContext:
         self._actions: dict[str, list[dict]] = {}       # ActionRequest dicts
         self._surfaced: dict[str, list[dict]] = {}      # IntegrationResult dicts
 
+        # Rolling agent exchange history — last N tool-call cycles per meeting.
+        # Each entry is a list of message dicts (user + assistant + tool turns)
+        # from one QAgent.run() call, used to give Q short-term memory.
+        self._agent_history: dict[str, list[list[dict]]] = {}
+
+        # Tool actions taken this meeting — human-readable strings extracted
+        # from tool results, persisted to meeting_history.json at end.
+        self._tool_actions: dict[str, list[str]] = {}
+
         # Cross-meeting history loaded from disk
         self._history: dict[str, dict] = self._load_history()
 
@@ -247,6 +256,62 @@ class MeetingContext:
         """
         return [d.text for d in self._decisions.get(meeting_id, [])]
 
+    # ── Agent exchange history (short-term memory) ───────────────────────────
+
+    def add_agent_exchange(self, meeting_id: str, exchange: list[dict]) -> None:
+        """
+        Store one completed agent exchange for short-term memory.
+
+        An exchange is the slice of the messages list from the current user
+        utterance onward (excluding the system prompt), captured after each
+        QAgent.run() call. Capped at the last 10 exchanges per meeting.
+
+        Args:
+            meeting_id: The active meeting session.
+            exchange:   List of message dicts (user + assistant/tool turns).
+        """
+        self._agent_history.setdefault(meeting_id, [])
+        self._agent_history[meeting_id].append(exchange)
+        self._agent_history[meeting_id] = self._agent_history[meeting_id][-10:]
+
+        # Extract a human-readable summary of any tool results for long-term memory
+        for msg in exchange:
+            if msg.get("role") == "tool":
+                content = msg.get("content", "")
+                name = msg.get("name", "tool")
+                if content and not content.startswith("Error"):
+                    summary = f"[{name}] {content[:200]}"
+                    self._tool_actions.setdefault(meeting_id, [])
+                    self._tool_actions[meeting_id].append(summary)
+
+        logger.debug(
+            "[%s] Agent exchange saved — total exchanges: %d",
+            meeting_id,
+            len(self._agent_history[meeting_id]),
+        )
+
+    def get_agent_history(self, meeting_id: str, n: int = 3) -> list[dict]:
+        """
+        Return the last n exchanges as a flat list of messages.
+
+        These are injected between the system prompt and the current user
+        message in QAgent.run() to give the LLM short-term memory of recent
+        tool calls and their results.
+
+        Args:
+            meeting_id: The active meeting session.
+            n:          Number of past exchanges to include (default 3).
+
+        Returns:
+            Flat list of message dicts in chronological order.
+        """
+        exchanges = self._agent_history.get(meeting_id, [])
+        recent = exchanges[-n:]
+        flat: list[dict] = []
+        for exchange in recent:
+            flat.extend(exchange)
+        return flat
+
     # ── Cross-meeting search ──────────────────────────────────────────────────
 
     def search_past_meetings(self, query: str) -> str:
@@ -279,6 +344,7 @@ class MeetingContext:
             searchable = " ".join([
                 meeting.get("summary", ""),
                 " ".join(meeting.get("decisions", [])),
+                " ".join(meeting.get("tool_actions", [])),
                 meeting.get("transcript_snippet", ""),
             ]).lower()
             searchable_words = set(searchable.split())
@@ -298,10 +364,13 @@ class MeetingContext:
             summary = meeting.get("summary", "No summary available.")
             decisions = meeting.get("decisions", [])
             dec_str = "; ".join(decisions[:3]) if decisions else "none recorded"
+            tool_actions = meeting.get("tool_actions", [])
+            actions_str = "; ".join(tool_actions[:5]) if tool_actions else "none"
             parts.append(
                 f"Meeting {mid} ({date}):\n"
                 f"  Summary: {summary}\n"
-                f"  Decisions: {dec_str}"
+                f"  Decisions: {dec_str}\n"
+                f"  Actions taken: {actions_str}"
             )
 
         return "\n\n".join(parts)
@@ -356,12 +425,14 @@ class MeetingContext:
 
         decisions = [d.text for d in self._decisions.get(meeting_id, [])]
         action_count = len(self._actions.get(meeting_id, []))
+        tool_actions = self._tool_actions.get(meeting_id, [])
 
         self._history[meeting_id] = {
             "meeting_id": meeting_id,
             "date": time.strftime("%Y-%m-%d"),
             "summary": summary,
             "decisions": decisions,
+            "tool_actions": tool_actions,
             "action_count": action_count,
             "transcript_snippet": snippet,
         }

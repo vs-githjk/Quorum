@@ -146,7 +146,7 @@ _DECISION_PHRASES: list[str] = [
 ]
 
 # Quorum trigger phrases (mirrors mode.py — kept local to avoid circular import)
-_QUORUM_TRIGGERS: list[str] = ["hey quorum", "quorum"]
+_Q_TRIGGERS: list[str] = ["hey q", "q"]
 
 # Proper-noun pattern: one or more capitalised words in a row, excluding
 # sentence-start words (we strip leading caps from the first word of a sentence).
@@ -341,7 +341,7 @@ class IntentDetector:
                 topics.append(m)
         return topics
 
-    def is_addressed_to_quorum(self, text: str) -> bool:
+    def is_addressed_to_q(self, text: str) -> bool:
         """
         Return True if the text explicitly addresses Quorum by name.
 
@@ -352,7 +352,7 @@ class IntentDetector:
             True if 'quorum' or 'hey quorum' appears (case-insensitive).
         """
         lowered = text.lower()
-        return any(trigger in lowered for trigger in _QUORUM_TRIGGERS)
+        return any(trigger in lowered for trigger in _Q_TRIGGERS)
 
     # ── Private helpers ───────────────────────────────────────────────────────
 

@@ -308,8 +308,10 @@ class QOrchestrator:
 
         mid = segment.meeting_id
 
-        # Any incoming speech resets the exchange idle timer
-        self._set_exchange_engaged(mid)
+        # Reset the idle timer only if an exchange is already active —
+        # do NOT create a new exchange from arbitrary speech.
+        if self._get_exchange_state(mid) == _EXCHANGE_ENGAGED:
+            self._set_exchange_engaged(mid)
 
         if mid not in self._segment_buffers:
             self._segment_buffers[mid] = []
