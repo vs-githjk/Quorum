@@ -150,10 +150,12 @@ class QBot:
             name: str | None = None,
             notes: str | None = None,
             assignee: str | None = None,
+            priority: str | None = None,
         ) -> str:
             return await update_asana_task(
                 task_gid, due_on=due_on or None, name=name or None,
                 notes=notes or None, assignee=assignee or None,
+                priority=priority or None,
             )
 
         async def _tool_send_chat_message(meeting_id: str, message: str) -> str:
