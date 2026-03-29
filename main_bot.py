@@ -385,7 +385,7 @@ class QBot:
         if novnc_link not in ("", None):
             _bot_id = self._bot_status.bot_id
             _mid = self._meeting_id
-            _link_msg = f"Shared browser (for screen actions): {novnc_link}"
+            _link_msg = f"Hey! I'm Q 👋 — your AI meeting assistant.\n\nShared browser (for screen actions): {novnc_link}"
 
             async def _send_novnc_link() -> None:
                 # Google Meet chat API typically becomes available a few minutes
