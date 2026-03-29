@@ -52,6 +52,7 @@ _ELEVENLABS_VOICE   = os.getenv("ELEVENLABS_VOICE_ID", "").strip()
 _WEBHOOK_BASE_URL   = os.getenv("WEBHOOK_BASE_URL", "").strip()
 _BOT_NAME           = os.getenv("BOT_NAME", "Q").strip()
 _SERVER_PORT        = int(os.getenv("SERVER_PORT", "8000"))
+_SCREEN_API_URL     = os.getenv("SCREEN_API_URL", "http://localhost:5000").rstrip("/")
 
 
 def _fmt_results(results: list) -> str:
@@ -160,6 +161,19 @@ class QBot:
         async def _tool_search_past_meetings(meeting_id: str, query: str) -> str:
             return context.search_past_meetings(query)
 
+        _screen_link_sent: set[str] = set()
+
+        async def _tool_open_on_screen(meeting_id: str, url: str) -> str:
+            from integrations.base import safe_post
+            resp = await safe_post(f"{_SCREEN_API_URL}/open", {"url": url})
+            if resp is None:
+                return "Error: screen container unreachable."
+            if meeting_id not in _screen_link_sent:
+                _screen_link_sent.add(meeting_id)
+                novnc = _SCREEN_API_URL.rsplit(":", 1)[0] + ":6080/vnc.html"
+                await self._send_chat(meeting_id, f"Screen sharing active: {novnc}")
+            return f"Opened {url} on screen."
+
         agent.register_tools({
             "search_slack":          _tool_search_slack,
             "search_notion":         _tool_search_notion,
@@ -170,6 +184,7 @@ class QBot:
             "send_chat_message":     _tool_send_chat_message,
             "log_decision":          _tool_log_decision,
             "search_past_meetings":  _tool_search_past_meetings,
+            "open_on_screen":        _tool_open_on_screen,
         })
 
         self._orchestrator.set_agent(agent)

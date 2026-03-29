@@ -1,4 +1,5 @@
 import asyncio, os
+import aiohttp
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -8,6 +9,9 @@ from integrations.asana import search_asana, create_asana_task
 from integrations.slack import search_slack
 from integrations.notion import search_notion
 from integrations.github import search_github
+
+_SCREEN_API_URL = os.getenv("SCREEN_API_URL", "http://localhost:5000")
+_screen_link_sent = set()
 
 def fmt(results):
     if not results:
@@ -23,6 +27,16 @@ async def main():
     async def tool_search_github(meeting_id, query): return fmt(await search_github(query))
     async def tool_search_asana(meeting_id, query): return fmt(await search_asana(query))
     async def tool_create_asana_task(meeting_id, title, notes=""): return await create_asana_task(title, notes)
+    async def tool_open_on_screen(meeting_id, url):
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{_SCREEN_API_URL}/open", json={"url": url}) as r:
+                if r.status != 200:
+                    return "Error: screen container unreachable."
+        if meeting_id not in _screen_link_sent:
+            _screen_link_sent.add(meeting_id)
+            print(f"[screen] noVNC link: {_SCREEN_API_URL.rsplit(':', 1)[0]}:6080/vnc.html")
+        return f"Opened {url} on screen."
+
     async def tool_log_decision(meeting_id, decision):
         ctx.add_decision(decision, meeting_id); return f"Logged: {decision}"
     async def tool_search_past_meetings(meeting_id, query): return ctx.search_past_meetings(query)
@@ -35,6 +49,7 @@ async def main():
         "create_asana_task": tool_create_asana_task,
         "log_decision": tool_log_decision,
         "search_past_meetings": tool_search_past_meetings,
+        "open_on_screen": tool_open_on_screen,
     })
 
     mid = "test-meeting"

@@ -61,12 +61,14 @@ Tools available:
 - search_github          → search GitHub PRs/issues
 - log_decision           → log a meeting decision
 - search_past_meetings   → search past meeting history
+- open_on_screen         → open a URL in the shared meeting browser (visible to all via noVNC)
 
 Rules:
 - ALWAYS call a tool before answering any question about tasks, docs, PRs, Slack, or past meetings.
 - To update a task: first call search_asana to get the task_gid, then call update_asana_task.
 - NEVER create a new task when asked to update an existing one.
 - When asked to send a link or URL to chat: call send_chat_message with the URL.
+- When asked to open, show, or pull up a URL or website: call open_on_screen.
 - Keep spoken responses under 2 sentences after receiving tool results.
 - If a tool returns no results, say so in one sentence.
 - Do not narrate tool use ("Let me search..." — just call the tool silently).
@@ -208,6 +210,20 @@ TOOLS: list[dict] = [
                     "query": {"type": "string", "description": "Topic or keyword to search for"}
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_on_screen",
+            "description": "Open a URL in the shared meeting browser screen, visible to all participants via noVNC. Use when asked to open, show, display, or pull up a website or URL.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to open"}
+                },
+                "required": ["url"],
             },
         },
     },
