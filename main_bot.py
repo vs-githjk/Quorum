@@ -381,10 +381,10 @@ class QBot:
             _link_msg = f"Shared browser (for screen actions): {novnc_link}"
 
             async def _send_novnc_link() -> None:
-                for _ in range(24):   # up to 2 min (24 × 5s)
+                for _ in range(36):   # up to 6 min (36 × 10s)
                     if await self._recall.send_chat_message(_bot_id, _link_msg, _silent=True):
                         return
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(10)
                 logger.warning("noVNC link never delivered — chat API stayed unavailable")
 
             asyncio.create_task(_send_novnc_link())
