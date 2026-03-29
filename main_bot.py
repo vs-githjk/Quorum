@@ -371,6 +371,10 @@ class QBot:
         # Send the noVNC link in a background task — the on_bot_join message
         # can't include localhost URLs, so we retry send_chat_message until
         # Google Meet's chat API becomes available (can take ~1-2 min).
+        # Mark the link as sent upfront so _ensure_novnc_link doesn't also
+        # try to send it while the background task is retrying.
+        self._screen_link_sent.add(self._meeting_id)
+
         if novnc_link not in ("", None):
             _bot_id = self._bot_status.bot_id
             _mid = self._meeting_id
@@ -378,15 +382,12 @@ class QBot:
 
             async def _send_novnc_link() -> None:
                 for _ in range(24):   # up to 2 min (24 × 5s)
-                    if await self._recall.send_chat_message(_bot_id, _link_msg):
-                        self._screen_link_sent.add(_mid)
+                    if await self._recall.send_chat_message(_bot_id, _link_msg, _silent=True):
                         return
                     await asyncio.sleep(5)
                 logger.warning("noVNC link never delivered — chat API stayed unavailable")
 
             asyncio.create_task(_send_novnc_link())
-        else:
-            self._screen_link_sent.add(self._meeting_id)
 
         # ── Step 5: Keep running until interrupted ────────────────────────
         try:
