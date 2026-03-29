@@ -2,7 +2,7 @@ services:
   screen:
     build: ./screen
     ports:
-      - "5000:5000"
+      - "5001:5000"
       - "6080:6080"
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
