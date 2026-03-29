@@ -27,6 +27,9 @@ from voice.transcribe import DeepgramTranscriber
 # Agent brain
 from agent import QuorumOrchestrator, SpeakCommand, ContextRequest, ActionRequest, IntegrationResult
 
+# Integrations
+from integrations import integration_callback
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 
 _LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -217,12 +220,8 @@ class QuorumBot:
         await self._speaker.speak(cmd.text)
 
     async def _integration_stub(self, req: ContextRequest) -> list[IntegrationResult]:
-        """
-        Stub integration callback — replace with real integrations module.
-        Returns empty list until integrations branch is merged in.
-        """
-        logger.info("Integration request (stub): query=%r sources=%s", req.query, req.sources)
-        return []
+        """Live integration callback — queries GitHub, Notion, Slack, Asana."""
+        return await integration_callback(req)
 
     async def _action_stub(self, req: ActionRequest) -> dict:
         """

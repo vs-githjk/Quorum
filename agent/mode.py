@@ -20,7 +20,23 @@ ON_DEMAND = "on_demand"
 VALID_MODES = {ACTIVE, ON_DEMAND}
 
 # Trigger phrases that count as addressing Quorum directly
-QUORUM_TRIGGERS = ["quorum", "hey quorum", "hey q", "coram", "hey coram", "korem", "hey korem"]
+QUORUM_TRIGGERS = [
+    # Correct name
+    "quorum", "hey quorum",
+    # Common short forms
+    "hey q",
+    # Deepgram phonetic mishearings observed in the wild
+    "coram", "hey coram",
+    "cora", "hey cora",
+    "coron", "hey coron",
+    "corin", "hey corin",
+    "corum", "hey corum",
+    "colrum", "hey colrum",
+    "cole", "hey cole",
+    "goram", "hey goram",
+    "korem", "hey korem",
+    "korum", "hey korum",
+]
 
 # Default path for persisted mode; can be overridden via env var
 DEFAULT_STATE_FILE = os.getenv("QUORUM_MODE_STATE_FILE", "mode_state.json")
@@ -126,14 +142,22 @@ class ModeManager:
         """
         Return True if any Quorum trigger phrase appears in text.
 
+        Strips punctuation before matching so "Hey, Q." and "Hey Q" both hit.
+
         Args:
             text: Raw transcript text to check.
 
         Returns:
             True if 'quorum' or 'hey quorum' is found (case-insensitive).
         """
+        import re as _re
         lowered = text.lower()
-        return any(trigger in lowered for trigger in QUORUM_TRIGGERS)
+        # Match on raw text first (fast path)
+        if any(trigger in lowered for trigger in QUORUM_TRIGGERS):
+            return True
+        # Strip punctuation and retry — catches "Hey, Q." → "hey q"
+        stripped = _re.sub(r"[^\w\s]", "", lowered)
+        return any(trigger in stripped for trigger in QUORUM_TRIGGERS)
 
     # ── Persistence ──────────────────────────────────────────────────────────
 
