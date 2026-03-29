@@ -19,9 +19,16 @@ ACTIVE = "active"
 ON_DEMAND = "on_demand"
 VALID_MODES = {ACTIVE, ON_DEMAND}
 
-# Trigger phrases that count as addressing Q directly
+# Trigger phrases that count as addressing Q directly.
+# Includes common Deepgram phonetic mishearings of the letter "Q".
 Q_TRIGGERS = [
     "q", "hey q",
+    # Deepgram mishearings observed in the wild
+    "hugh", "hey hugh",
+    "cue", "hey cue",
+    "que", "hey que",
+    "ku", "hey ku",
+    "kew", "hey kew",
 ]
 
 # Default path for persisted mode; can be overridden via env var

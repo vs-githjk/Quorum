@@ -146,7 +146,14 @@ _DECISION_PHRASES: list[str] = [
 ]
 
 # Quorum trigger phrases (mirrors mode.py — kept local to avoid circular import)
-_Q_TRIGGERS: list[str] = ["hey q", "q"]
+_Q_TRIGGERS: list[str] = [
+    "q", "hey q",
+    "hugh", "hey hugh",
+    "cue", "hey cue",
+    "que", "hey que",
+    "ku", "hey ku",
+    "kew", "hey kew",
+]
 
 # Proper-noun pattern: one or more capitalised words in a row, excluding
 # sentence-start words (we strip leading caps from the first word of a sentence).
