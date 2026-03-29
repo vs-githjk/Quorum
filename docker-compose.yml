@@ -1,0 +1,11 @@
+services:
+  screen:
+    build: ./screen
+    ports:
+      - "5000:5000"
+      - "6080:6080"
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-openai/gpt-4o-mini}
+      - VISION_MODEL=${VISION_MODEL:-openai/gpt-4o}
+    restart: unless-stopped

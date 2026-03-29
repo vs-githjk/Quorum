@@ -62,13 +62,20 @@ Tools available:
 - log_decision           → log a meeting decision
 - search_past_meetings   → search past meeting history
 - open_on_screen         → open a URL in the shared meeting browser (visible to all via noVNC)
+- act_on_screen          → perform any task in the browser using vision (search, interact, fill forms, navigate)
+- render_visualization   → generate and display a data visualization from meeting context
 
 Rules:
 - ALWAYS call a tool before answering any question about tasks, docs, PRs, Slack, or past meetings.
 - To update a task: first call search_asana to get the task_gid, then call update_asana_task.
 - NEVER create a new task when asked to update an existing one.
 - When asked to send a link or URL to chat: call send_chat_message with the URL.
-- When asked to open, show, or pull up a URL or website: call open_on_screen.
+- When asked to open, show, pull up, or open in a new tab a URL or website: call open_on_screen (ignore "new tab" — just open it).
+- When asked to search, interact with, or do something on a website: call act_on_screen with a clear instruction.
+- When asked to CREATE, WRITE, or BUILD something (a doc, a report, a summary, a page): call act_on_screen or render_visualization — do NOT call search tools.
+- After any screen action completes, always tell the user it is visible in the noVNC window and include the noVNC link in your response.
+- When asked to "show" something that was already rendered or opened on screen: do NOT call any tools — just tell the user it is already visible in the noVNC window.
+- When numbers, revenue, metrics, or data are discussed and a chart/visualization is requested: call render_visualization.
 - Keep spoken responses under 2 sentences after receiving tool results.
 - If a tool returns no results, say so in one sentence.
 - Do not narrate tool use ("Let me search..." — just call the tool silently).
@@ -224,6 +231,44 @@ TOOLS: list[dict] = [
                     "url": {"type": "string", "description": "The URL to open"}
                 },
                 "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "act_on_screen",
+            "description": "Perform any task in the shared browser using a vision loop — search, click, fill forms, navigate, create docs, write content, or interact with any website. Use this for CREATE/WRITE/BUILD tasks and for anything beyond just opening a URL.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "instruction": {
+                        "type": "string",
+                        "description": "Plain English instruction of what to do in the browser, e.g. 'search for quarterly revenue trends on Google' or 'find the pricing page on stripe.com'",
+                    }
+                },
+                "required": ["instruction"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "render_visualization",
+            "description": "Generate and display a data visualization on the shared screen. Use when the meeting discusses numbers, metrics, revenue, timelines, or comparisons and a chart would help.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "What the visualization should show, e.g. 'bar chart of quarterly revenue growth'",
+                    },
+                    "data": {
+                        "type": "string",
+                        "description": "The data to visualize, extracted from the conversation, e.g. 'Q1: 100k, Q2: 150k, Q3: 200k'",
+                    },
+                },
+                "required": ["description"],
             },
         },
     },

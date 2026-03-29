@@ -10,10 +10,10 @@ until xdpyinfo -display :99 >/dev/null 2>&1; do
     sleep 0.1
 done
 
-# Start x11vnc (serves the Xvfb display over VNC)
-x11vnc -display :99 -nopw -listen localhost -xkb -forever &
+# Start x11vnc — -wait 10 = ~100fps, -nap = low CPU when idle
+x11vnc -display :99 -nopw -listen localhost -xkb -forever -nap -wait 10 &
 
-# Start websockify + noVNC (bridges VNC to WebSocket for browser access)
+# Start websockify + noVNC
 websockify --web /usr/share/novnc 6080 localhost:5900 &
 
 # Start Flask API

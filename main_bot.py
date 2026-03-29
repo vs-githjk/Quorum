@@ -53,6 +53,12 @@ _WEBHOOK_BASE_URL   = os.getenv("WEBHOOK_BASE_URL", "").strip()
 _BOT_NAME           = os.getenv("BOT_NAME", "Q").strip()
 _SERVER_PORT        = int(os.getenv("SERVER_PORT", "8000"))
 _SCREEN_API_URL     = os.getenv("SCREEN_API_URL", "http://localhost:5000").rstrip("/")
+_QUORUM_MODE        = os.getenv("QUORUM_MODE", "on_demand").strip()
+_OPENROUTER_KEY     = os.getenv("OPENROUTER_API_KEY", "").strip()
+_OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini").strip()
+_OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
+
+_CANCEL_WORDS = frozenset({"stop", "cancel", "abort", "halt"})
 
 
 def _fmt_results(results: list) -> str:
@@ -107,6 +113,7 @@ class QBot:
         self._bot_status: BotStatus | None = None
         self._meeting_id: str | None = None
         self._server_task: asyncio.Task | None = None
+        self._screen_action_running: bool = False
 
         # ── Agent orchestrator ────────────────────────────────────────────
         self._orchestrator = QOrchestrator(
@@ -163,16 +170,97 @@ class QBot:
 
         _screen_link_sent: set[str] = set()
 
+        def _novnc_url() -> str:
+            base = _SCREEN_API_URL.rsplit(":", 1)[0]
+            return f"{base}:6080/vnc.html?autoconnect=1&resize=scale&view_only=0"
+
+        async def _ensure_novnc_link(meeting_id: str) -> None:
+            if meeting_id not in _screen_link_sent:
+                _screen_link_sent.add(meeting_id)
+                await self._send_chat(meeting_id, f"Screen sharing active: {_novnc_url()}")
+
         async def _tool_open_on_screen(meeting_id: str, url: str) -> str:
             from integrations.base import safe_post
             resp = await safe_post(f"{_SCREEN_API_URL}/open", {"url": url})
             if resp is None:
                 return "Error: screen container unreachable."
-            if meeting_id not in _screen_link_sent:
-                _screen_link_sent.add(meeting_id)
-                novnc = _SCREEN_API_URL.rsplit(":", 1)[0] + ":6080/vnc.html"
-                await self._send_chat(meeting_id, f"Screen sharing active: {novnc}")
+            await _ensure_novnc_link(meeting_id)
             return f"Opened {url} on screen."
+
+        async def _tool_act_on_screen(meeting_id: str, instruction: str) -> str:
+            import json as _json
+            import aiohttp
+            self._screen_action_running = True
+            summary = "Done."
+            try:
+                timeout = aiohttp.ClientTimeout(total=300, connect=10)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(
+                        f"{_SCREEN_API_URL}/act",
+                        json={"instruction": instruction},
+                    ) as resp:
+                        await _ensure_novnc_link(meeting_id)
+                        async for line_bytes in resp.content:
+                            line = line_bytes.decode().strip()
+                            if not line.startswith("data:"):
+                                continue
+                            try:
+                                event = _json.loads(line[5:].strip())
+                            except _json.JSONDecodeError:
+                                continue
+                            etype = event.get("type")
+                            if etype == "step" and _QUORUM_MODE == "active":
+                                await self._speak_command(SpeakCommand(
+                                    text=event.get("description", ""),
+                                    meeting_id=meeting_id,
+                                ))
+                            elif etype in ("done", "error"):
+                                summary = event.get("summary", "Done.")
+                                break
+                            elif etype == "cancelled":
+                                summary = "Task cancelled."
+                                break
+            finally:
+                self._screen_action_running = False
+            return summary
+
+        async def _tool_render_visualization(
+            meeting_id: str, description: str, data: str = ""
+        ) -> str:
+            import re as _re
+            import aiohttp
+            if not _OPENROUTER_KEY:
+                return "Error: OPENROUTER_API_KEY not set."
+            prompt = (
+                f"Generate a beautiful self-contained single-file HTML visualization.\n"
+                f"Description: {description}\n"
+                f"Data: {data}\n\n"
+                f"Requirements:\n"
+                f"- Use Chart.js from https://cdn.jsdelivr.net/npm/chart.js\n"
+                f"- Dark background (#0f0f0f), vibrant colours, clean professional look\n"
+                f"- Title at top, responsive layout\n"
+                f"- Return ONLY the complete HTML document, no explanation"
+            )
+            headers = {
+                "Authorization": f"Bearer {_OPENROUTER_KEY}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": _OPENROUTER_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(_OPENROUTER_URL, json=payload, headers=headers) as r:
+                    resp_data = await r.json()
+            html = resp_data["choices"][0]["message"]["content"]
+            html = _re.sub(r"^```(?:html)?\s*", "", html.strip())
+            html = _re.sub(r"\s*```$", "", html)
+            from integrations.base import safe_post
+            result = await safe_post(f"{_SCREEN_API_URL}/render_html", {"html": html})
+            if result is None:
+                return "Error: screen container unreachable."
+            await _ensure_novnc_link(meeting_id)
+            return f"Visualization rendered on screen: {description}"
 
         agent.register_tools({
             "search_slack":          _tool_search_slack,
@@ -185,6 +273,8 @@ class QBot:
             "log_decision":          _tool_log_decision,
             "search_past_meetings":  _tool_search_past_meetings,
             "open_on_screen":        _tool_open_on_screen,
+            "act_on_screen":         _tool_act_on_screen,
+            "render_visualization":  _tool_render_visualization,
         })
 
         self._orchestrator.set_agent(agent)
@@ -303,11 +393,25 @@ class QBot:
 
         logger.info("[%s] %s", segment.speaker, segment.text)
 
+        # ── Cancel screen action if running and user says stop ────────────
+        if self._screen_action_running:
+            words = set(segment.text.lower().split())
+            if words & _CANCEL_WORDS:
+                await self._cancel_screen_action()
+                return
+
         # ── AGENT HOOK — dispatch to orchestrator ─────────────────────────
         await self._orchestrator.process_segment(segment)
         # ─────────────────────────────────────────────────────────────────
 
     # ── Agent callbacks ───────────────────────────────────────────────────────
+
+    async def _cancel_screen_action(self) -> None:
+        from integrations.base import safe_post
+        await safe_post(f"{_SCREEN_API_URL}/act/cancel", {})
+        logger.info("Screen action cancelled by user speech")
+        if self._meeting_id:
+            await self._speak_command(SpeakCommand(text="Stopping.", meeting_id=self._meeting_id))
 
     async def _speak_command(self, cmd: SpeakCommand) -> None:
         """Receive a SpeakCommand from the orchestrator and speak it aloud."""
