@@ -70,7 +70,7 @@ class RecallClient:
     # ── Public methods ────────────────────────────────────────────────────────
 
     async def join_meeting(
-        self, meeting_url: str, meeting_id: str
+        self, meeting_url: str, meeting_id: str, join_message: str | None = None
     ) -> BotStatus:
         """
         Send a bot to a meeting and configure real-time transcription.
@@ -95,9 +95,10 @@ class RecallClient:
         # Recall.ai blocks localhost URLs in payloads — only include companion
         # link if it's a real public URL, not localhost.
         is_public_companion = companion_link.startswith("https://")
-        join_message = f"Hi, I am {self._bot_name}."
-        if is_public_companion:
-            join_message += f" Follow along here: {companion_link}"
+        if join_message is None:
+            join_message = f"Hi, I am {self._bot_name}."
+            if is_public_companion:
+                join_message += f" Follow along here: {companion_link}"
 
         payload: dict[str, Any] = {
             "bot_name": self._bot_name,

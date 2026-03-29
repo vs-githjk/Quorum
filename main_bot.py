@@ -332,8 +332,11 @@ class QBot:
 
         # ── Step 3: Join meeting via Recall.ai ────────────────────────────
         logger.info("Joining meeting: %s", meeting_url)
+        novnc_base = _SCREEN_API_URL.rsplit(":", 1)[0]
+        novnc_link = f"{novnc_base}:6080/vnc.html?autoconnect=1&resize=scale&view_only=0"
+        _join_msg = f"Hey! I'm Q 👋 — your AI meeting assistant.\n\nShared browser (for screen actions): {novnc_link}"
         self._bot_status = await self._recall.join_meeting(
-            meeting_url, self._meeting_id
+            meeting_url, self._meeting_id, join_message=_join_msg
         )
 
         if self._bot_status.status == "error":
@@ -359,18 +362,8 @@ class QBot:
         # bot status flips to active; give it a few more seconds to settle.
         await asyncio.sleep(5)
         await self._speaker.speak("Hey everyone, I'm Q, your AI meeting assistant. Ask me anything.")
-        # Wait for audio injection to complete before sending chat
-        await asyncio.sleep(3)
-        novnc_base = _SCREEN_API_URL.rsplit(":", 1)[0]
-        novnc_link = f"{novnc_base}:6080/vnc.html?autoconnect=1&resize=scale&view_only=0"
-        # Retry the greeting chat — Google Meet chat API can take a few extra
-        # seconds to become available after the bot status flips to active.
-        _chat_msg = f"Hey! I'm Q 👋 — your AI meeting assistant.\n\nShared browser (for screen actions): {novnc_link}"
-        for _attempt in range(6):
-            sent = await self._recall.send_chat_message(self._bot_status.bot_id, _chat_msg)
-            if sent:
-                break
-            await asyncio.sleep(5)
+        # The greeting chat message is sent by Recall.ai via on_bot_join
+        # (configured at join time) — no manual send needed here.
         self._screen_link_sent.add(self._meeting_id)
 
         # ── Step 5: Keep running until interrupted ────────────────────────
