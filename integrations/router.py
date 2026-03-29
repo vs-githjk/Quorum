@@ -148,6 +148,8 @@ class IntegrationRouter:
 
         raw_sources = data.get("sources", [])
         raw_queries = data.get("queries", {})
+        if not isinstance(raw_queries, dict):
+            raw_queries = {}
 
         # Validate: only keep sources that were in the original request
         valid_sources = [s for s in raw_sources if s in req.sources]

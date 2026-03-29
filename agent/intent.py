@@ -64,13 +64,24 @@ _QUESTION_PHRASES: list[str] = [
 
 _ACTION_TASK_PHRASES: list[str] = [
     "add that as a task",
+    "add a task",
+    "add task",
+    "create a task",
     "create a ticket",
+    "create task",
+    "add a ticket",
+    "raise a ticket",
     "add to asana",
+    "put that in asana",
+    "add it to asana",
+    "assign a task",
     "make a note",
     "action item",
-    "create a task",
     "log that",
     "note that down",
+    "track that",
+    "task to fix",
+    "task for",
 ]
 
 _ACTION_PR_PHRASES: list[str] = [
@@ -181,6 +192,10 @@ class IntentDetector:
             Intent dataclass describing the detected intent.
         """
         text = segment.text
+        # Strip "hey quorum" / "quorum" prefix so it doesn't leak into topic detection
+        stripped_text = re.sub(r"(?i)^(hey\s+)?quorum[,.]?\s*", "", text).strip()
+        if stripped_text:
+            text = stripped_text
         lowered = text.lower()
 
         # ── Hard action intents (no LLM needed) ──────────────────────────────

@@ -15,7 +15,7 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_TIMEOUT = 3.0  # seconds — keeps meetings responsive
+_DEFAULT_TIMEOUT = 8.0  # seconds — generous enough for external APIs
 
 
 async def safe_get(

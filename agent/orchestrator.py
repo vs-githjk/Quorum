@@ -19,7 +19,11 @@ from typing import Any, Callable
 import aiohttp
 
 from .context import MeetingContext
-from .intent import IntentDetector
+from .intent import (
+    IntentDetector,
+    NONE, ACTION_TASK, ACTION_PR, ACTION_CHART, DECISION, QUESTION, TOPIC_MENTION,
+    Intent,
+)
 from .mode import ModeManager
 
 logger = logging.getLogger(__name__)
@@ -310,8 +314,6 @@ class QuorumOrchestrator:
         )
 
         # ── Step 4: bail on NONE ──────────────────────────────────────────────
-        from .intent import NONE, ACTION_TASK, ACTION_PR, ACTION_CHART, DECISION, QUESTION, TOPIC_MENTION
-
         if intent.type == NONE:
             logger.debug("[%s] Intent=NONE — staying quiet", mid)
             return
@@ -645,8 +647,6 @@ class QuorumOrchestrator:
             answer_segment: The segment containing the user's answer.
             pending:        The stored clarification dict.
         """
-        from .intent import Intent, ACTION_PR, ACTION_TASK
-
         mid          = answer_segment.meeting_id
         intent_type  = pending["intent_type"]
         answer_text  = answer_segment.text.strip()

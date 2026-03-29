@@ -72,6 +72,7 @@ async def integration_callback(req: ContextRequest) -> list[IntegrationResult]:
 
     # ── Fan out to all selected sources in parallel ───────────────────────────
     tasks = []
+    queued_sources = []
     for source in plan.sources:
         fn = _SOURCE_FN.get(source)
         if fn is None:
@@ -79,6 +80,7 @@ async def integration_callback(req: ContextRequest) -> list[IntegrationResult]:
             continue
         refined_query = plan.refined_queries.get(source, req.query)
         tasks.append(fn(refined_query, req.max_results))
+        queued_sources.append(source)
 
     if not tasks:
         return []
@@ -87,7 +89,7 @@ async def integration_callback(req: ContextRequest) -> list[IntegrationResult]:
 
     # ── Flatten results, log per-source errors ────────────────────────────────
     results: list[IntegrationResult] = []
-    for source, batch in zip(plan.sources, batches):
+    for source, batch in zip(queued_sources, batches):
         if isinstance(batch, Exception):
             logger.error(
                 "[%s] Integration source %r raised: %s",

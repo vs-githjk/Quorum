@@ -33,17 +33,26 @@ def _headers() -> dict:
     }
 
 
-def _extract_title(page: dict) -> str:
-    """Pull the page title from Notion's nested property structure."""
-    props = page.get("properties", {})
-    # Try common title property names
-    for key in ("Name", "title", "Title"):
+def _extract_title(obj: dict) -> str:
+    """Pull the title from a Notion page or database object."""
+    obj_type = obj.get("object", "page")
+
+    # Databases store their title at the top level as a rich_text array
+    if obj_type == "database":
+        parts = obj.get("title", [])
+        text = "".join(p.get("plain_text", "") for p in parts).strip()
+        if text:
+            return text
+
+    # Pages store their title inside properties
+    props = obj.get("properties", {})
+    for key in ("Name", "title", "Title", "Page"):
         prop = props.get(key, {})
         title_parts = prop.get("title", [])
         if title_parts:
             return "".join(p.get("plain_text", "") for p in title_parts).strip()
-    # Fall back to page id
-    return f"Notion page {page.get('id', 'unknown')[:8]}"
+
+    return f"Notion {obj_type} {obj.get('id', 'unknown')[:8]}"
 
 
 async def _fetch_page_snippet(page_id: str) -> str:
@@ -86,8 +95,7 @@ async def search_notion(query: str, max_results: int = 3) -> list[IntegrationRes
         return []
 
     body = {
-        "query": query,
-        "filter": {"value": "page", "property": "object"},
+        "query":     query,
         "page_size": max_results,
     }
     data = await safe_post(f"{_API_BASE}/search", _headers(), body)
@@ -96,33 +104,36 @@ async def search_notion(query: str, max_results: int = 3) -> list[IntegrationRes
         logger.warning("Notion: search returned unexpected type: %s", type(data))
         return []
 
-    pages = data.get("results", [])[:max_results]
-    if not pages:
+    objects = data.get("results", [])[:max_results]
+    if not objects:
         logger.info("Notion: no results for query %r", query)
         return []
 
-    # Fetch snippets for all pages in parallel
-    snippets = await asyncio.gather(
-        *[_fetch_page_snippet(p["id"]) for p in pages],
-        return_exceptions=True,
-    )
+    # Only fetch snippets for pages (databases don't have block children)
+    page_ids = [o["id"] for o in objects if o.get("object") == "page"]
+    snippets_map: dict[str, str] = {}
+    if page_ids:
+        fetched = await asyncio.gather(
+            *[_fetch_page_snippet(pid) for pid in page_ids],
+            return_exceptions=True,
+        )
+        for pid, snippet in zip(page_ids, fetched):
+            snippets_map[pid] = snippet if isinstance(snippet, str) else ""
 
     results = []
-    for page, snippet in zip(pages, snippets):
-        if isinstance(snippet, Exception):
-            snippet = ""
-
-        title   = _extract_title(page)
-        page_id = page.get("id", "")
-        url     = page.get("url", f"https://notion.so/{page_id.replace('-', '')}")
-        summary = snippet if snippet else f"Notion page: {title}"
+    for obj in objects:
+        obj_id  = obj.get("id", "")
+        title   = _extract_title(obj)
+        url     = obj.get("url", f"https://notion.so/{obj_id.replace('-', '')}")
+        snippet = snippets_map.get(obj_id, "")
+        summary = snippet if snippet else f"Notion {obj.get('object', 'page')}: {title}"
 
         results.append(IntegrationResult(
             source="notion",
             title=title,
             url=url,
             summary=summary,
-            raw_data=page,
+            raw_data=obj,
             timestamp=time.time(),
         ))
 

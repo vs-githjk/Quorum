@@ -613,9 +613,6 @@ async def _run_test() -> None:
     check("search_past_meetings finds Stripe meeting", "mtg-past" in result_stripe)
 
     # end_meeting (without real LLM — mocked via monkeypatching)
-    original_llm = ctx._call_llm
-    ctx._call_llm = lambda p, timeout=10: _fake_llm(p)  # type: ignore
-
     import asyncio
     async def _fake_llm(p, timeout=10.0):
         return "The team discussed authentication. OAuth 2.0 was chosen. One task was created."
