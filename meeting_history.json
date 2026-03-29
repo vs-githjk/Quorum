@@ -102,5 +102,14 @@
     "decisions": [],
     "action_count": 0,
     "transcript_snippet": "Hey, Corin. Could you open Slack? Can you tell me the title of the pages you have access to? Do you have access to Notion pages? Hey, Quorum. Could you access the page called test Quorum from Notion?"
+  },
+  "062a3260": {
+    "meeting_id": "062a3260",
+    "date": "2026-03-29",
+    "summary": "Summary unavailable \u2014 LLM unreachable.",
+    "decisions": [],
+    "tool_actions": [],
+    "action_count": 0,
+    "transcript_snippet": "Hey, Quorum. Can you open Amazon? Hey, queue. Can you open Amazon? If there's another, I have to place the link in the chat before it starts. No? Oh, yeah. We'll figure that out. You said screen share? Yeah. Not not screen sharing. Oh, we need to figure out do we need to figure out screen sharing? Else here. I'll give the link of this Everyone can just control terminal. Oh, true. Yeah. Everyone can control. That's fine. I think it's fine. I think I have, like, the screen share screen. Like once "
   }
 }
