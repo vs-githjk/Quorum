@@ -367,9 +367,26 @@ class QBot:
         # bot status flips to active; give it a few more seconds to settle.
         await asyncio.sleep(5)
         await self._speaker.speak("Hey everyone, I'm Q, your AI meeting assistant. Ask me anything.")
-        # The greeting chat message is sent by Recall.ai via on_bot_join
-        # (configured at join time) — no manual send needed here.
-        self._screen_link_sent.add(self._meeting_id)
+
+        # Send the noVNC link in a background task — the on_bot_join message
+        # can't include localhost URLs, so we retry send_chat_message until
+        # Google Meet's chat API becomes available (can take ~1-2 min).
+        if novnc_link not in ("", None):
+            _bot_id = self._bot_status.bot_id
+            _mid = self._meeting_id
+            _link_msg = f"Shared browser (for screen actions): {novnc_link}"
+
+            async def _send_novnc_link() -> None:
+                for _ in range(24):   # up to 2 min (24 × 5s)
+                    if await self._recall.send_chat_message(_bot_id, _link_msg):
+                        self._screen_link_sent.add(_mid)
+                        return
+                    await asyncio.sleep(5)
+                logger.warning("noVNC link never delivered — chat API stayed unavailable")
+
+            asyncio.create_task(_send_novnc_link())
+        else:
+            self._screen_link_sent.add(self._meeting_id)
 
         # ── Step 5: Keep running until interrupted ────────────────────────
         try:
