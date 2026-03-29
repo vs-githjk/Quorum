@@ -363,10 +363,14 @@ class QBot:
         await asyncio.sleep(3)
         novnc_base = _SCREEN_API_URL.rsplit(":", 1)[0]
         novnc_link = f"{novnc_base}:6080/vnc.html?autoconnect=1&resize=scale&view_only=0"
-        await self._send_chat(
-            self._meeting_id,
-            f"Hey! I'm Q 👋 — your AI meeting assistant.\n\nShared browser (for screen actions): {novnc_link}",
-        )
+        # Retry the greeting chat — Google Meet chat API can take a few extra
+        # seconds to become available after the bot status flips to active.
+        _chat_msg = f"Hey! I'm Q 👋 — your AI meeting assistant.\n\nShared browser (for screen actions): {novnc_link}"
+        for _attempt in range(6):
+            sent = await self._recall.send_chat_message(self._bot_status.bot_id, _chat_msg)
+            if sent:
+                break
+            await asyncio.sleep(5)
         self._screen_link_sent.add(self._meeting_id)
 
         # ── Step 5: Keep running until interrupted ────────────────────────

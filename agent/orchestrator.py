@@ -370,7 +370,9 @@ class QOrchestrator:
             self._set_exchange_engaged(mid)
             text = _strip_q_trigger(segment.text)
             if not text or len(text.split()) <= 1:
-                await self._speak_and_record(SpeakCommand(
+                # Acknowledge without setting the 15s cooldown so the user's
+                # next request (which often follows immediately) isn't blocked.
+                await self._speak(SpeakCommand(
                     text="Hey! What do you need?",
                     meeting_id=mid,
                 ))
