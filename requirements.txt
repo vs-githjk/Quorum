@@ -1,5 +1,8 @@
 # Agent layer
 aiohttp>=3.9.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+langgraph>=0.2.0
 
 # Voice-bot layer
 deepgram-sdk==3.10.0

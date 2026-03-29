@@ -14,29 +14,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-import aiohttp
-
 logger = logging.getLogger(__name__)
 
 # Path for cross-meeting persistence; overridable via env var
 DEFAULT_HISTORY_FILE = os.getenv("QUORUM_HISTORY_FILE", "meeting_history.json")
-
-# LLM settings (mirrors orchestrator defaults — context.py calls LLM only for
-# summarize_meeting, keeping the dependency self-contained)
-_HERMES_HOST = os.getenv("HERMES_HOST", "http://localhost:11434")
-_HERMES_URL = f"{_HERMES_HOST}/api/generate"
-_HERMES_MODEL = os.getenv("HERMES_MODEL", "hermes3")
-_OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-_OPENROUTER_MODEL = "nousresearch/hermes-3-llama-3.1-405b:free"
-_LLM_TIMEOUT = 2.0  # seconds before falling back to OpenRouter
-_SUMMARIZE_TIMEOUT = 10.0  # longer timeout for summarisation
-
-_SYSTEM_PROMPT = (
-    "You are Quorum, an AI meeting participant. You are helpful, concise, "
-    "and only speak when you have something genuinely useful to add. "
-    "Keep all spoken responses under 2 sentences. You are currently in a meeting."
-)
 
 
 # ── In-session dataclasses ────────────────────────────────────────────────────
@@ -333,7 +314,7 @@ class MeetingContext:
         )
 
         logger.info("Generating summary for meeting %s", meeting_id)
-        summary = await self._call_llm(prompt, timeout=_SUMMARIZE_TIMEOUT)
+        summary = await self._call_llm(prompt)
         logger.info("Summary generated for %s: %r", meeting_id, summary[:80])
         return summary
 
@@ -376,92 +357,19 @@ class MeetingContext:
 
     # ── LLM helpers ───────────────────────────────────────────────────────────
 
-    async def _call_llm(self, prompt: str, timeout: float = _LLM_TIMEOUT) -> str:
+    async def _call_llm(self, prompt: str) -> str:
         """
-        Try Hermes locally; fall back to OpenRouter on failure or timeout.
-
-        Args:
-            prompt:  The user-facing prompt to send.
-            timeout: Seconds to wait for Hermes before giving up.
+        Call the LLM: try Hermes first, fall back to OpenRouter.
 
         Returns:
             LLM response text, or a safe fallback string on total failure.
         """
+        from .llm import ainvoke_with_fallback
         try:
-            result = await self._call_hermes(prompt, timeout)
-            logger.debug("LLM responded via Hermes")
-            return result
+            return await ainvoke_with_fallback(prompt)
         except Exception as exc:
-            logger.warning("Hermes unavailable (%s) — falling back to OpenRouter", exc)
-
-        try:
-            result = await self._call_openrouter(prompt)
-            logger.debug("LLM responded via OpenRouter")
-            return result
-        except Exception as exc:
-            logger.error("OpenRouter also failed: %s", exc)
+            logger.error("LLM call failed in context: %s", exc)
             return "Summary unavailable — LLM unreachable."
-
-    async def _call_hermes(self, prompt: str, timeout: float) -> str:
-        """
-        Call the local Hermes endpoint (Ollama-compatible).
-
-        Args:
-            prompt:  Prompt text.
-            timeout: Connection + read timeout in seconds.
-
-        Returns:
-            Generated text from Hermes.
-
-        Raises:
-            aiohttp.ClientError, asyncio.TimeoutError on failure.
-        """
-        payload = {
-            "model": _HERMES_MODEL,
-            "prompt": f"{_SYSTEM_PROMPT}\n\n{prompt}",
-            "stream": False,
-        }
-        client_timeout = aiohttp.ClientTimeout(total=timeout)
-        async with aiohttp.ClientSession(timeout=client_timeout) as session:
-            async with session.post(_HERMES_URL, json=payload) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-                return data.get("response", "").strip()
-
-    async def _call_openrouter(self, prompt: str) -> str:
-        """
-        Call OpenRouter as LLM fallback.
-
-        Args:
-            prompt: Prompt text.
-
-        Returns:
-            Generated text from OpenRouter.
-
-        Raises:
-            aiohttp.ClientError on failure, ValueError if API key is missing.
-        """
-        if not _OPENROUTER_API_KEY:
-            raise ValueError("OPENROUTER_API_KEY env var not set")
-
-        headers = {
-            "Authorization": f"Bearer {_OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": _OPENROUTER_MODEL,
-            "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                _OPENROUTER_URL, json=payload, headers=headers
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-                return data["choices"][0]["message"]["content"].strip()
 
     # ── Persistence helpers ───────────────────────────────────────────────────
 

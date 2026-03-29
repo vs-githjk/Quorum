@@ -21,10 +21,10 @@ VALID_MODES = {ACTIVE, ON_DEMAND}
 
 # Trigger phrases that count as addressing Quorum directly
 QUORUM_TRIGGERS = [
-    # Correct name
+    # Primary trigger
+    "hey q", "hey queue", "hey cue",
+    # Full name still works
     "quorum", "hey quorum",
-    # Common short forms
-    "hey q",
     # Deepgram phonetic mishearings observed in the wild
     "coram", "hey coram",
     "cora", "hey cora",
