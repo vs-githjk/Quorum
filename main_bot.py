@@ -33,6 +33,7 @@ from integrations.github import search_github
 from integrations.notion import search_notion
 from integrations.slack import search_slack
 from integrations.asana import search_asana, create_asana_task, update_asana_task
+from integrations.gmail import search_gmail, send_email
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -114,6 +115,7 @@ class QBot:
         self._meeting_id: str | None = None
         self._server_task: asyncio.Task | None = None
         self._screen_action_running: bool = False
+        self._screen_link_sent: set[str] = set()
 
         # ── Agent orchestrator ────────────────────────────────────────────
         self._orchestrator = QOrchestrator(
@@ -149,10 +151,12 @@ class QBot:
             name: str | None = None,
             notes: str | None = None,
             assignee: str | None = None,
+            priority: str | None = None,
         ) -> str:
             return await update_asana_task(
                 task_gid, due_on=due_on or None, name=name or None,
                 notes=notes or None, assignee=assignee or None,
+                priority=priority or None,
             )
 
         async def _tool_send_chat_message(meeting_id: str, message: str) -> str:
@@ -168,24 +172,25 @@ class QBot:
         async def _tool_search_past_meetings(meeting_id: str, query: str) -> str:
             return context.search_past_meetings(query)
 
-        _screen_link_sent: set[str] = set()
-
         def _novnc_url() -> str:
             base = _SCREEN_API_URL.rsplit(":", 1)[0]
             return f"{base}:6080/vnc.html?autoconnect=1&resize=scale&view_only=0"
 
         async def _ensure_novnc_link(meeting_id: str) -> None:
-            if meeting_id not in _screen_link_sent:
-                _screen_link_sent.add(meeting_id)
+            if meeting_id not in self._screen_link_sent:
+                self._screen_link_sent.add(meeting_id)
                 await self._send_chat(meeting_id, f"Screen sharing active: {_novnc_url()}")
 
         async def _tool_open_on_screen(meeting_id: str, url: str) -> str:
             from integrations.base import safe_post
-            resp = await safe_post(f"{_SCREEN_API_URL}/open", {"url": url})
+            import urllib.parse as _urlparse
+            # Use hostname as tab name so each domain gets its own tab
+            tab = _urlparse.urlparse(url).netloc or url[:30]
+            resp = await safe_post(f"{_SCREEN_API_URL}/open", {}, {"url": url, "tab": tab})
             if resp is None:
                 return "Error: screen container unreachable."
             await _ensure_novnc_link(meeting_id)
-            return f"Opened {url} on screen."
+            return f"Opened {url} on screen (tab: {tab})."
 
         async def _tool_act_on_screen(meeting_id: str, instruction: str) -> str:
             import json as _json
@@ -214,8 +219,12 @@ class QBot:
                                     text=event.get("description", ""),
                                     meeting_id=meeting_id,
                                 ))
-                            elif etype in ("done", "error"):
+                            elif etype == "done":
                                 summary = event.get("summary", "Done.")
+                                break
+                            elif etype == "error":
+                                summary = f"Screen action failed: {event.get('message', event.get('summary', 'unknown error'))}"
+                                logger.error("act_on_screen error: %s", summary)
                                 break
                             elif etype == "cancelled":
                                 summary = "Task cancelled."
@@ -256,7 +265,7 @@ class QBot:
             html = _re.sub(r"^```(?:html)?\s*", "", html.strip())
             html = _re.sub(r"\s*```$", "", html)
             from integrations.base import safe_post
-            result = await safe_post(f"{_SCREEN_API_URL}/render_html", {"html": html})
+            result = await safe_post(f"{_SCREEN_API_URL}/render_html", {}, {"html": html})
             if result is None:
                 return "Error: screen container unreachable."
             await _ensure_novnc_link(meeting_id)
@@ -330,7 +339,20 @@ class QBot:
                 await self._recall.send_chat_message(self._bot_status.bot_id, answer)
             return answer
 
+        async def _tool_search_gmail(meeting_id: str, query: str) -> str:
+            return _fmt_results(await search_gmail(query))
+
+        async def _tool_send_email(meeting_id: str, to: str, subject: str, body: str) -> str:
+            return await send_email(to, subject, body)
+
+        async def _tool_get_screen_link(meeting_id: str) -> str:
+            base = _SCREEN_API_URL.rsplit(":", 1)[0]
+            return f"{base}:6080/vnc.html?autoconnect=1&resize=scale&view_only=0"
+
         agent.register_tools({
+            "get_screen_link":       _tool_get_screen_link,
+            "search_gmail":          _tool_search_gmail,
+            "send_email":            _tool_send_email,
             "search_slack":          _tool_search_slack,
             "search_notion":         _tool_search_notion,
             "search_github":         _tool_search_github,
@@ -398,8 +420,16 @@ class QBot:
 
         # ── Step 3: Join meeting via Recall.ai ────────────────────────────
         logger.info("Joining meeting: %s", meeting_url)
+        novnc_base = _SCREEN_API_URL.rsplit(":", 1)[0]
+        novnc_link = f"{novnc_base}:6080/vnc.html?autoconnect=1&resize=scale&view_only=0"
+        # Recall.ai blocks localhost URLs in payloads — only embed the noVNC
+        # link if it's a real public URL, otherwise send a plain greeting.
+        if novnc_link.startswith("https://"):
+            _join_msg = f"Hey! I'm Q 👋 — your AI meeting assistant.\n\nShared browser (for screen actions): {novnc_link}"
+        else:
+            _join_msg = "Hey! I'm Q 👋 — your AI meeting assistant."
         self._bot_status = await self._recall.join_meeting(
-            meeting_url, self._meeting_id
+            meeting_url, self._meeting_id, join_message=_join_msg
         )
 
         if self._bot_status.status == "error":
@@ -412,6 +442,42 @@ class QBot:
         # ── Step 4: Register session with manager + agent ────────────────
         self._manager.start_session(self._meeting_id, self._bot_status.bot_id)
         await self._orchestrator.start_meeting(self._meeting_id)
+
+        # ── Step 4b: Greet the meeting and share the noVNC link ───────────
+        # Poll until Recall confirms the bot is in the meeting (up to 30s)
+        for _ in range(30):
+            bot_status = await self._recall.get_bot_status(self._bot_status.bot_id)
+            if bot_status.status == "active":
+                break
+            await asyncio.sleep(1)
+
+        # Extra buffer — Google Meet chat API isn't available the instant the
+        # bot status flips to active; give it a few more seconds to settle.
+        await asyncio.sleep(5)
+        await self._speaker.speak("Hey everyone, I'm Q, your AI meeting assistant. Ask me anything.")
+
+        # Send the noVNC link in a background task — the on_bot_join message
+        # can't include localhost URLs, so we retry send_chat_message until
+        # Google Meet's chat API becomes available (can take ~1-2 min).
+        # Mark the link as sent upfront so _ensure_novnc_link doesn't also
+        # try to send it while the background task is retrying.
+        self._screen_link_sent.add(self._meeting_id)
+
+        if novnc_link not in ("", None):
+            _bot_id = self._bot_status.bot_id
+            _mid = self._meeting_id
+            _link_msg = f"Hey! I'm Q 👋 — your AI meeting assistant.\n\nShared browser (for screen actions): {novnc_link}"
+
+            async def _send_novnc_link() -> None:
+                # Google Meet chat API typically becomes available a few minutes
+                # after the bot joins. Try once per minute for up to 5 minutes.
+                for _ in range(5):
+                    await asyncio.sleep(60)
+                    if await self._recall.send_chat_message(_bot_id, _link_msg, _silent=True):
+                        return
+                logger.warning("noVNC link never delivered — chat API stayed unavailable")
+
+            asyncio.create_task(_send_novnc_link())
 
         # ── Step 5: Keep running until interrupted ────────────────────────
         try:
@@ -480,7 +546,7 @@ class QBot:
 
     async def _cancel_screen_action(self) -> None:
         from integrations.base import safe_post
-        await safe_post(f"{_SCREEN_API_URL}/act/cancel", {})
+        await safe_post(f"{_SCREEN_API_URL}/act/cancel", {}, {})
         logger.info("Screen action cancelled by user speech")
         if self._meeting_id:
             await self._speak_command(SpeakCommand(text="Stopping.", meeting_id=self._meeting_id))

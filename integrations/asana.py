@@ -173,12 +173,30 @@ async def create_asana_task(
     return f"Created task: {title} ({permalink})" if permalink else f"Created task: {title}"
 
 
+async def _find_priority_option(task_gid: str, priority: str) -> tuple[str, str] | None:
+    """
+    Look up the custom field GID and enum option GID for a priority value.
+
+    Returns (field_gid, option_gid) or None if not found.
+    """
+    task = await _fetch_task_detail(task_gid)
+    if not task:
+        return None
+    for cf in task.get("custom_fields", []):
+        if "priority" in (cf.get("name") or "").lower():
+            for opt in cf.get("enum_options") or []:
+                if (opt.get("name") or "").lower() == priority.lower():
+                    return cf["gid"], opt["gid"]
+    return None
+
+
 async def update_asana_task(
     task_gid: str,
     due_on: str | None = None,
     name: str | None = None,
     notes: str | None = None,
     assignee: str | None = None,
+    priority: str | None = None,
 ) -> str:
     """
     Update fields on an existing Asana task.
@@ -206,6 +224,17 @@ async def update_asana_task(
     if assignee is not None:
         fields["assignee"] = assignee
 
+    # Priority is a custom field — resolve the field/option GIDs first
+    priority_set = False
+    if priority is not None:
+        result = await _find_priority_option(task_gid, priority)
+        if result:
+            field_gid, option_gid = result
+            fields["custom_fields"] = {field_gid: option_gid}
+            priority_set = True
+        else:
+            logger.warning("Asana: priority %r not found as a custom field on task %s", priority, task_gid)
+
     if not fields:
         return "Error: no fields specified to update."
 
@@ -219,9 +248,11 @@ async def update_asana_task(
     task      = data.get("data", {})
     task_name = task.get("name", task_gid)
     parts = []
-    if due_on   is not None: parts.append(f"due date → {due_on or 'cleared'}")
-    if name     is not None: parts.append(f"name → {name}")
-    if notes    is not None: parts.append(f"notes updated")
-    if assignee is not None: parts.append(f"assignee → {assignee}")
+    if due_on        is not None: parts.append(f"due date → {due_on or 'cleared'}")
+    if name          is not None: parts.append(f"name → {name}")
+    if notes         is not None: parts.append(f"notes updated")
+    if assignee      is not None: parts.append(f"assignee → {assignee}")
+    if priority_set:               parts.append(f"priority → {priority}")
+    elif priority    is not None:  parts.append(f"priority → {priority} (field not found in workspace)")
     logger.info("Asana: updated task %r (%s): %s", task_name, task_gid, ", ".join(parts))
     return f"Updated task '{task_name}': {', '.join(parts)}."

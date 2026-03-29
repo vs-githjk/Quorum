@@ -153,6 +153,8 @@ _Q_TRIGGERS: list[str] = [
     "que", "hey que",
     "ku", "hey ku",
     "kew", "hey kew",
+    "queue", "hey queue",
+    "aq", "hey aq",
 ]
 
 # Proper-noun pattern: one or more capitalised words in a row, excluding

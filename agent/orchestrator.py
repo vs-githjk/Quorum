@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # ── Timing constants ──────────────────────────────────────────────────────────
 
-_ACTIVE_MODE_COOLDOWN = 15.0   # seconds between Q utterances in active mode
+_ACTIVE_MODE_COOLDOWN = 5.0   # seconds between Q utterances in active mode
 
 # Debounce — wait for speech to settle before processing
 _DEBOUNCE_COMPLETE = 0.8   # seconds — segment ends with .!? (complete sentence)
@@ -370,7 +370,9 @@ class QOrchestrator:
             self._set_exchange_engaged(mid)
             text = _strip_q_trigger(segment.text)
             if not text or len(text.split()) <= 1:
-                await self._speak_and_record(SpeakCommand(
+                # Acknowledge without setting the 15s cooldown so the user's
+                # next request (which often follows immediately) isn't blocked.
+                await self._speak(SpeakCommand(
                     text="Hey! What do you need?",
                     meeting_id=mid,
                 ))
@@ -384,7 +386,7 @@ class QOrchestrator:
                 return
             text = segment.text
 
-        if self._on_cooldown(mid):
+        if self._on_cooldown(mid) and not addressed:
             logger.debug("[%s] On cooldown — skipping agent call", mid)
             return
 

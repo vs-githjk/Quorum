@@ -46,21 +46,42 @@ DISPLAY          = os.environ.get("DISPLAY", ":99")
 OPENROUTER_KEY   = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.environ.get("VISION_MODEL", os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o"))
 OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
-CHROME_PROFILE   = "/chrome-profile"
+CHROME_PROFILE   = os.environ.get("CHROME_PROFILE", "/chrome-profile")
 
 # ── Playwright thread + queue ─────────────────────────────────────────────────
 
 _pw_queue: queue.Queue = queue.Queue()
-_page = None
+_ctx = None        # Playwright BrowserContext
+_tabs: dict = {}   # tab_name → Page
+_active_tab = "default"
+
+
+def _get_or_create_tab(name: str):
+    """Return existing tab or open a new page for it. Must run on PW thread."""
+    global _active_tab
+    if name not in _tabs:
+        page = _ctx.new_page()
+        page.goto("about:blank")
+        _tabs[name] = page
+        logger.info("Opened new tab: %r", name)
+    _active_tab = name
+    # Bring the tab to front so noVNC shows it
+    _tabs[name].bring_to_front()
+    return _tabs[name]
+
+
+def _current_page():
+    """Return the active page. Must run on PW thread."""
+    return _tabs.get(_active_tab) or list(_tabs.values())[-1]
 
 
 def _pw_worker():
     """Single dedicated thread that owns all Playwright state."""
-    global _page
+    global _ctx, _tabs
     logger.info("Playwright thread starting (DISPLAY=%s)", DISPLAY)
     pw = sync_playwright().start()
     os.makedirs(CHROME_PROFILE, exist_ok=True)
-    ctx = pw.chromium.launch_persistent_context(
+    _ctx = pw.chromium.launch_persistent_context(
         user_data_dir=CHROME_PROFILE,
         headless=False,
         args=[
@@ -72,8 +93,10 @@ def _pw_worker():
         viewport={"width": 1280, "height": 720},
         env={**os.environ, "DISPLAY": DISPLAY},
     )
-    _page = ctx.new_page()
-    _page.goto("about:blank")
+    # Seed the default tab
+    default_page = _ctx.new_page()
+    default_page.goto("about:blank")
+    _tabs["default"] = default_page
     logger.info("Playwright ready")
 
     while True:
@@ -124,9 +147,9 @@ Action formats:
 {"action": "error", "summary": "Why the task cannot be completed"}
 
 Rules:
-- For buttons with visible labels ("Next", "Sign in", "Continue", "Submit"): always use "click_text" not CSS selectors
+- Prefer specific CSS selectors (id, name, aria-label) over generic ones
+- Use "click_text" when you can only identify an element by its visible label
 - For input fields: prefer selectors with type, name, or aria-label (e.g. input[type="email"])
-- Use CSS selectors only for elements with no visible text label
 - After typing into a search field, always follow with {"action": "key", "key": "Enter"}
 - For contenteditable areas (e.g. Gmail email body): use {"action": "type", "selector": "div[contenteditable='true'][aria-label]", ...} — do NOT skip typing the body
 - Use "wait" when a page appears to still be loading
@@ -145,37 +168,38 @@ def _parse_action(content: str) -> dict:
 
 def _execute_action(action_data: dict) -> None:
     """Must be called from inside _pw() — runs on the Playwright thread."""
+    page = _current_page()
     action = action_data.get("action", "")
 
     if action == "navigate":
-        _page.goto(action_data["url"], wait_until="domcontentloaded", timeout=15000)
+        page.goto(action_data["url"], wait_until="domcontentloaded", timeout=15000)
 
     elif action == "click":
         try:
-            _page.click(action_data["selector"], timeout=5000)
+            page.click(action_data["selector"], timeout=5000)
         except Exception:
-            _page.click(action_data["selector"], force=True, timeout=3000)
+            page.click(action_data["selector"], force=True, timeout=3000)
 
     elif action == "click_text":
-        _page.get_by_text(action_data["text"]).first.click(timeout=5000)
+        page.get_by_text(action_data["text"]).first.click(timeout=5000)
 
     elif action == "type":
         selector = action_data["selector"]
         text     = action_data["text"]
         try:
-            _page.fill(selector, text, timeout=5000)
+            page.fill(selector, text, timeout=5000)
         except Exception:
             # contenteditable elements (e.g. Gmail body) don't support fill —
             # click to focus then type character by character
-            _page.click(selector, timeout=5000)
-            _page.keyboard.type(text, delay=20)
+            page.click(selector, timeout=5000)
+            page.keyboard.type(text, delay=20)
 
     elif action == "key":
-        _page.keyboard.press(action_data["key"])
+        page.keyboard.press(action_data["key"])
 
     elif action == "scroll":
         amount = 500 if action_data.get("direction", "down") == "down" else -500
-        _page.evaluate(f"window.scrollBy(0, {amount})")
+        page.evaluate(f"window.scrollBy(0, {amount})")
 
     elif action == "wait":
         time.sleep(min(float(action_data.get("seconds", 2)), 10))
@@ -198,7 +222,7 @@ def _vision_loop_generator(instruction: str, loop_id: str):
 
             # Screenshot (Playwright thread)
             try:
-                screenshot_bytes = _pw(lambda: _page.screenshot(full_page=False))
+                screenshot_bytes = _pw(lambda: _current_page().screenshot(full_page=False))
                 screenshot_b64 = base64.b64encode(screenshot_bytes).decode()
             except Exception as e:
                 yield f"data: {json.dumps({'type': 'error', 'message': f'Screenshot failed: {e}'})}\n\n"
@@ -288,16 +312,20 @@ def health():
 def navigate():
     data = request.get_json(force=True)
     url = data.get("url", "").strip()
+    tab = data.get("tab", "default").strip() or "default"
     if not url:
         return jsonify({"error": "url required"}), 400
-    _pw(lambda: _page.goto(url, wait_until="domcontentloaded", timeout=15000))
-    return jsonify({"status": "opened", "url": url})
+    def _open():
+        page = _get_or_create_tab(tab)
+        page.goto(url, wait_until="domcontentloaded", timeout=15000)
+    _pw(_open)
+    return jsonify({"status": "opened", "url": url, "tab": tab})
 
 
 @app.route("/screenshot")
 def screenshot():
     try:
-        png = _pw(lambda: _page.screenshot(full_page=False))
+        png = _pw(lambda: _current_page().screenshot(full_page=False))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     return jsonify({"image": base64.b64encode(png).decode(), "format": "png"})
@@ -310,7 +338,7 @@ def fill():
     text = data.get("text", "")
     if not selector:
         return jsonify({"error": "selector required"}), 400
-    _pw(lambda: _page.fill(selector, text, timeout=5000))
+    _pw(lambda: _current_page().fill(selector, text, timeout=5000))
     return jsonify({"status": "ok"})
 
 
@@ -320,7 +348,7 @@ def click():
     x, y = data.get("x"), data.get("y")
     if x is None or y is None:
         return jsonify({"error": "x and y required"}), 400
-    _pw(lambda: _page.mouse.click(x, y))
+    _pw(lambda: _current_page().mouse.click(x, y))
     return jsonify({"status": "clicked", "x": x, "y": y})
 
 
@@ -333,7 +361,7 @@ def render_html():
     with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w", encoding="utf-8") as f:
         f.write(html)
         path = f.name
-    _pw(lambda: _page.goto(f"file://{path}", wait_until="domcontentloaded", timeout=10000))
+    _pw(lambda: _current_page().goto(f"file://{path}", wait_until="domcontentloaded", timeout=10000))
     return jsonify({"status": "rendered"})
 
 
@@ -372,6 +400,6 @@ if __name__ == "__main__":
     t = threading.Thread(target=_pw_worker, daemon=True)
     t.start()
     # Wait for Playwright to be ready
-    while _page is None:
+    while "default" not in _tabs:
         time.sleep(0.1)
     app.run(host="0.0.0.0", port=5000, threaded=True)

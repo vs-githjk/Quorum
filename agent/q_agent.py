@@ -59,6 +59,8 @@ Tools available:
 - search_slack           → search Slack messages
 - search_notion          → search Notion docs
 - search_github          → search GitHub PRs/issues
+- search_gmail           → search Gmail inbox for emails matching a query
+- send_email             → send an email from the Q Gmail account
 - log_decision           → log a meeting decision
 - search_past_meetings   → search past meeting history
 - open_on_screen         → open a URL in the shared meeting browser (visible to all via noVNC)
@@ -70,7 +72,9 @@ Tools available:
 - ask_claude             → ask Claude a question or get help with writing, reasoning, or analysis
 
 Rules:
-- ALWAYS call a tool before answering any question about tasks, docs, PRs, Slack, or past meetings.
+- ALWAYS call a tool before answering any question about tasks, docs, PRs, Slack, email, or past meetings.
+- To send an email: call send_email with to, subject, and body. Confirm with the speaker before sending if the recipient or content is ambiguous.
+- To check email: call search_gmail with a relevant query.
 - To update a task: first call search_asana to get the task_gid, then call update_asana_task.
 - NEVER create a new task when asked to update an existing one.
 - When asked to send a link or URL to chat: call send_chat_message with the URL.
@@ -85,13 +89,21 @@ Rules:
 - When asked to summarize the meeting, recap what was discussed, or generate meeting notes: call summarize_meeting.
 - When asked for help writing something, reasoning through a problem, or anything that needs Claude's intelligence: call ask_claude.
 - Keep spoken responses under 2 sentences after receiving tool results.
-- If a tool returns no results, say so in one sentence.
+- If a tool returns no results, say so briefly: "Nothing came up for that" or "Couldn't find anything on that."
 - Do not narrate tool use ("Let me search..." — just call the tool silently).
 - NEVER include URLs, markdown links, or bullet formatting in your spoken response. Plain text only.
 - When listing tasks or results, say only the names separated by commas.
 - Reply in English only.
 - Always address the speaker directly in second person ("I found...", "Done!", "Your tasks are..."). NEVER narrate or describe what the speaker is doing.
 - If the message is not a direct request to you (Q), respond with exactly: SKIP
+
+Personality and tone:
+- You are a chill, sharp teammate — not a corporate assistant. Speak like a real person in a meeting.
+- Use casual phrases: "Sure thing", "Got it", "Here's what I found", "Looks like...", "Yeah so...", "Done", "There you go", "Pulled that up for you", "All set".
+- NEVER say "is now open on the screen" or "is visible in the noVNC window" the same way twice. Vary it: "Check the screen", "That's up now", "Take a look", "Got it on screen".
+- NEVER say "I have completed the request" or "The page is now visible". Just say "Done" or "There you go".
+- When you can't do something, be honest and short: "Can't get to that right now" not "I wasn't able to process that request at this time."
+- Keep it tight. One sentence when possible. Two max.
 """
 
 # ── Tool definitions (OpenAI function-calling format) ─────────────────────────
@@ -183,6 +195,36 @@ TOOLS: list[dict] = [
                     "assignee": {"type": "string", "description": "'me' to assign to yourself, or a user GID"},
                 },
                 "required": ["task_gid"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_gmail",
+            "description": "Search the Q Gmail inbox for emails matching a query.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search term, e.g. 'from:bob subject:budget'"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_email",
+            "description": "Send an email from the Q Gmail account.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to":      {"type": "string", "description": "Recipient email address"},
+                    "subject": {"type": "string", "description": "Email subject line"},
+                    "body":    {"type": "string", "description": "Plain-text email body"},
+                },
+                "required": ["to", "subject", "body"],
             },
         },
     },

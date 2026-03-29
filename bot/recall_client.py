@@ -70,7 +70,7 @@ class RecallClient:
     # ── Public methods ────────────────────────────────────────────────────────
 
     async def join_meeting(
-        self, meeting_url: str, meeting_id: str
+        self, meeting_url: str, meeting_id: str, join_message: str | None = None
     ) -> BotStatus:
         """
         Send a bot to a meeting and configure real-time transcription.
@@ -95,9 +95,10 @@ class RecallClient:
         # Recall.ai blocks localhost URLs in payloads — only include companion
         # link if it's a real public URL, not localhost.
         is_public_companion = companion_link.startswith("https://")
-        join_message = f"Hi, I am {self._bot_name}."
-        if is_public_companion:
-            join_message += f" Follow along here: {companion_link}"
+        if join_message is None:
+            join_message = f"Hi, I am {self._bot_name}."
+            if is_public_companion:
+                join_message += f" Follow along here: {companion_link}"
 
         payload: dict[str, Any] = {
             "bot_name": self._bot_name,
@@ -169,13 +170,16 @@ class RecallClient:
                 joined_at=None,
             )
 
-    async def send_chat_message(self, bot_id: str, message: str) -> bool:
+    async def send_chat_message(self, bot_id: str, message: str, _silent: bool = False) -> bool:
         """
         Send a chat message from the bot into the meeting.
 
         Args:
-            bot_id:  Recall.ai bot UUID.
-            message: Text to send to all participants.
+            bot_id:   Recall.ai bot UUID.
+            message:  Text to send to all participants.
+            _silent:  If True, log 403 failures at DEBUG instead of ERROR
+                      (used by retry loops where 403 is expected until chat
+                      becomes available).
 
         Returns:
             True on success, False on any failure.
@@ -192,12 +196,14 @@ class RecallClient:
             logger.info("Chat message sent via bot %s: %r", bot_id, message[:60])
             return True
 
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 403 and _silent:
+                logger.debug("send_chat_message 403 (chat not ready yet) bot=%s", bot_id)
+            else:
+                logger.error("send_chat_message failed for bot %s:\n%s", bot_id, traceback.format_exc())
+            return False
         except Exception:
-            logger.error(
-                "send_chat_message failed for bot %s:\n%s",
-                bot_id,
-                traceback.format_exc(),
-            )
+            logger.error("send_chat_message failed for bot %s:\n%s", bot_id, traceback.format_exc())
             return False
 
     async def inject_audio(self, bot_id: str, audio_bytes: bytes) -> bool:
