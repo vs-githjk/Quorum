@@ -60,6 +60,22 @@ _QUESTION_PHRASES: list[str] = [
     "what is the status",
     "what happened to",
     "remind me",
+    # Direct requests addressed to the bot
+    "can you open",
+    "can you show",
+    "can you give me",
+    "can you tell me",
+    "can you pull",
+    "can you check",
+    "can you search",
+    "could you open",
+    "could you show",
+    "could you give me",
+    "could you tell me",
+    "could you pull",
+    "could you check",
+    "could you find",
+    "could you search",
 ]
 
 _ACTION_TASK_PHRASES: list[str] = [
@@ -71,6 +87,10 @@ _ACTION_TASK_PHRASES: list[str] = [
     "create a task",
     "log that",
     "note that down",
+    "add a task",
+    "can you add",
+    "could you add",
+    "add that task",
 ]
 
 _ACTION_PR_PHRASES: list[str] = [
@@ -146,6 +166,10 @@ _STOPWORDS: set[str] = {
     "Saturday", "Sunday",
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
+    # Social / filler words — never meaningful topics
+    "Thank", "Thanks", "Okay", "Ok", "Sure", "Right", "Great",
+    "Good", "Yes", "No", "Yeah", "Yep", "Nope", "Ah", "Oh",
+    "Well", "Just", "Actually", "Basically", "Literally",
 }
 
 

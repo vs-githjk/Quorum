@@ -214,6 +214,27 @@ class MeetingContext:
             lines.append(f'[{seg.speaker} @ {ts}] "{seg.text}"')
         return "\n".join(lines)
 
+    def is_already_surfaced(self, url: str, meeting_id: str) -> bool:
+        """
+        Return True if a result with this URL has already been surfaced
+        in the given meeting.
+
+        Used by the orchestrator to deduplicate integration results before
+        passing them to the LLM or speaking about them.
+
+        Args:
+            url:        The canonical URL from IntegrationResult.
+            meeting_id: The active meeting session.
+
+        Returns:
+            True if this URL was previously passed to add_surfaced_result
+            for this meeting.
+        """
+        return any(
+            entry["url"] == url
+            for entry in self._surfaced.get(meeting_id, [])
+        )
+
     def get_decisions(self, meeting_id: str) -> list[str]:
         """
         Return all decisions logged for a meeting.
