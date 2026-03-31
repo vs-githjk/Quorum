@@ -13,9 +13,7 @@ term for each one. This means:
 Falls back silently to the original sources/query if the LLM fails or returns
 unparseable JSON — the integration still works, just without refinement.
 
-LLM calls use the same Hermes (local) → OpenRouter fallback pattern as the
-agent layer. The env vars are identical: HERMES_HOST, HERMES_MODEL,
-OPENROUTER_API_KEY.
+LLM calls use OpenRouter. Required env var: OPENROUTER_API_KEY.
 """
 
 import json
@@ -29,13 +27,9 @@ logger = logging.getLogger(__name__)
 
 # ── LLM config (mirrors agent/orchestrator.py — intentional duplication) ──────
 
-_HERMES_HOST      = os.getenv("HERMES_HOST", "http://localhost:11434")
-_HERMES_URL       = f"{_HERMES_HOST}/api/generate"
-_HERMES_MODEL     = os.getenv("HERMES_MODEL", "hermes3")
 _OPENROUTER_KEY   = os.getenv("OPENROUTER_API_KEY", "")
 _OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
-_OPENROUTER_MODEL = "nousresearch/hermes-3-llama-3.1-70b"
-_LLM_TIMEOUT      = 2.0   # seconds before falling back to OpenRouter
+_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 
 _SYSTEM_PROMPT = (
     "You are a JSON-only routing assistant. "
@@ -51,6 +45,7 @@ Available sources: {sources}
 
 Tool descriptions:
 - github: code repositories, pull requests (PRs), issues, branches, commits, bug numbers
+- google: web search, general knowledge, external information, look up anything on the internet
 - notion: documents, specs, wikis, meeting notes, decisions, design docs
 - slack: messages, conversations, channel posts, announcements, DMs
 - asana: tasks, tickets, action items, project tracking, assignments
@@ -166,26 +161,8 @@ class IntegrationRouter:
     # ── LLM calls ─────────────────────────────────────────────────────────────
 
     async def _call_llm(self, prompt: str) -> str:
-        """Try Hermes first, fall back to OpenRouter."""
-        try:
-            return await self._call_hermes(prompt)
-        except Exception as exc:
-            logger.debug("Router: Hermes unavailable (%s) — trying OpenRouter", exc)
-
+        """Call OpenRouter."""
         return await self._call_openrouter(prompt)
-
-    async def _call_hermes(self, prompt: str) -> str:
-        payload = {
-            "model":  _HERMES_MODEL,
-            "prompt": f"{_SYSTEM_PROMPT}\n\n{prompt}",
-            "stream": False,
-        }
-        timeout = aiohttp.ClientTimeout(total=_LLM_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(_HERMES_URL, json=payload) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-                return data.get("response", "").strip()
 
     async def _call_openrouter(self, prompt: str) -> str:
         if not _OPENROUTER_KEY:

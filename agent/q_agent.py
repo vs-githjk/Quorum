@@ -13,9 +13,7 @@ Loop:
 
 Max iterations: 4 (prevents runaway loops)
 
-LLM providers (tried in order):
-    1. Hermes 3 via local Ollama  (/api/chat with tools)
-    2. OpenRouter                 (same OpenAI-compatible format)
+LLM provider: OpenRouter (OpenAI-compatible format)
 """
 
 import asyncio
@@ -32,11 +30,6 @@ from .context import MeetingContext
 logger = logging.getLogger(__name__)
 
 # ── LLM config ────────────────────────────────────────────────────────────────
-
-_HERMES_HOST    = os.getenv("HERMES_HOST", "http://localhost:11434")
-_HERMES_CHAT    = f"{_HERMES_HOST}/api/chat"
-_HERMES_MODEL   = os.getenv("HERMES_MODEL", "hermes3")
-_HERMES_TIMEOUT = 8.0   # generous — tool calls need time
 
 _OPENROUTER_KEY   = os.getenv("OPENROUTER_API_KEY", "")
 _OPENROUTER_URL   = "https://openrouter.ai/api/v1/chat/completions"
@@ -57,6 +50,7 @@ Tools available:
 - create_asana_task      → create a new Asana task
 - update_asana_task      → change due date, name, notes, or assignee on an EXISTING task (use task_gid from search_asana)
 - send_chat_message      → type a message (or URL) into the meeting chat
+- search_google          → search the web via Google (general knowledge, look up anything)
 - search_slack           → search Slack messages
 - search_notion          → search Notion docs
 - search_github          → search GitHub PRs/issues
@@ -78,9 +72,10 @@ Rules:
 - To check email: call search_gmail with a relevant query.
 - To update a task: first call search_asana to get the task_gid, then call update_asana_task.
 - NEVER create a new task when asked to update an existing one.
-- When asked to send a link or URL to chat: call send_chat_message with the URL.
+- When asked to send a link or URL to chat: call send_chat_message with the URL. If it returns "Chat unavailable", read the URL aloud in your response.
 - When asked to open, show, pull up, or open in a new tab a URL or website: call open_on_screen (ignore "new tab" — just open it).
-- When asked to search, interact with, or do something on a website: call act_on_screen with a clear instruction.
+- When asked to search the web, look something up, or Google something: call search_google — NOT act_on_screen.
+- When asked to interact with or do something on a specific website: call act_on_screen with a clear instruction.
 - When asked to CREATE, WRITE, or BUILD something (a doc, a report, a summary, a page): call act_on_screen or render_visualization — do NOT call search tools.
 - After any screen action completes, always tell the user it is visible in the noVNC window and include the noVNC link in your response.
 - When asked to "show" something that was already rendered or opened on screen: do NOT call any tools — just tell the user it is already visible in the noVNC window.
@@ -622,31 +617,12 @@ class QAgent:
     # ── LLM callers ───────────────────────────────────────────────────────────
 
     async def _call_llm(self, messages: list[dict]) -> dict | None:
-        """Try Hermes first, fall back to OpenRouter. Returns the message dict."""
-        try:
-            return await self._call_hermes(messages)
-        except Exception as exc:
-            logger.warning("Agent: Hermes unavailable (%s) — falling back to OpenRouter", exc)
-
+        """Call OpenRouter. Returns the message dict, or None on failure."""
         try:
             return await self._call_openrouter(messages)
         except Exception as exc:
-            logger.error("Agent: OpenRouter also failed: %s", exc)
+            logger.error("Agent: OpenRouter failed: %s", exc)
             return None
-
-    async def _call_hermes(self, messages: list[dict]) -> dict:
-        payload = {
-            "model":    _HERMES_MODEL,
-            "messages": messages,
-            "tools":    TOOLS,
-            "stream":   False,
-        }
-        timeout = aiohttp.ClientTimeout(total=_HERMES_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(_HERMES_CHAT, json=payload) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-                return data["message"]
 
     async def _call_openrouter(self, messages: list[dict]) -> dict:
         if not _OPENROUTER_KEY:

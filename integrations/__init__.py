@@ -30,6 +30,7 @@ from agent import ContextRequest, IntegrationResult
 
 from .asana import search_asana
 from .github import search_github
+from .google_search import search_google
 from .notion import search_notion
 from .router import IntegrationRouter
 from .slack import search_slack
@@ -39,6 +40,7 @@ logger = logging.getLogger(__name__)
 # Source name → search function
 _SOURCE_FN = {
     "github": search_github,
+    "google": search_google,
     "notion": search_notion,
     "slack":  search_slack,
     "asana":  search_asana,

@@ -34,6 +34,7 @@ from integrations.notion import search_notion
 from integrations.slack import search_slack
 from integrations.asana import search_asana, create_asana_task, update_asana_task
 from integrations.gmail import search_gmail, send_email
+from integrations.google_search import search_google
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -141,6 +142,9 @@ class QBot:
         async def _tool_search_asana(meeting_id: str, query: str) -> str:
             return _fmt_results(await search_asana(query))
 
+        async def _tool_search_google(meeting_id: str, query: str) -> str:
+            return _fmt_results(await search_google(query))
+
         async def _tool_create_asana_task(meeting_id: str, title: str, notes: str = "") -> str:
             return await create_asana_task(title, notes)
 
@@ -161,8 +165,10 @@ class QBot:
 
         async def _tool_send_chat_message(meeting_id: str, message: str) -> str:
             if self._bot_status and self._bot_status.bot_id:
-                await self._recall.send_chat_message(self._bot_status.bot_id, message)
-                return "Message sent to meeting chat."
+                ok = await self._recall.send_chat_message(self._bot_status.bot_id, message)
+                if ok:
+                    return "Message sent to meeting chat."
+                return "Chat unavailable right now (meeting chat not ready yet). Read the message aloud instead so participants hear it."
             return "Error: bot not active."
 
         async def _tool_log_decision(meeting_id: str, decision: str) -> str:
@@ -357,6 +363,7 @@ class QBot:
             "search_notion":         _tool_search_notion,
             "search_github":         _tool_search_github,
             "search_asana":          _tool_search_asana,
+            "search_google":         _tool_search_google,
             "create_asana_task":     _tool_create_asana_task,
             "update_asana_task":     _tool_update_asana_task,
             "send_chat_message":     _tool_send_chat_message,
